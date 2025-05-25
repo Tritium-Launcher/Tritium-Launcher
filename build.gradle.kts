@@ -16,14 +16,13 @@ repositories {
 dependencies {
     // Kotlin standard library
     implementation(libs.kotlin.stdlib)
-    implementation(libs.kotlin.scripting.jvm)
-    implementation(libs.kotlin.scripting.common)
-    implementation(libs.kotlin.scripting.host)
-    implementation(libs.kotlin.scripting.compiler.embeddable)
 
     // KSP
     ksp(libs.autoservice.ksp)
     implementation(libs.autoservice.annotations)
+    compileOnly(libs.koin)
+    implementation(libs.koin.slf4j)
+    implementation(libs.koin.annotations)
 
     // FlatLaf
     implementation(libs.flatlaf)
@@ -53,6 +52,8 @@ dependencies {
     implementation(libs.logback.classic)
     implementation(libs.kotlin.reflect)
 }
+
+sourceSets["main"].java.srcDirs("src/main/kotlin")
 
 idea {
     module {
