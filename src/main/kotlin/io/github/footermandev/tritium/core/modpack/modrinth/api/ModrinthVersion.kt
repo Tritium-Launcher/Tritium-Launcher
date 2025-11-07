@@ -24,13 +24,13 @@ data class ModrinthVersion(
     val date_published: String,
     val downloads: Int,
     val changelog_url: String?,
-    val files: List<File>
+    val files: List<MRFile>
 ) {
     /**
      * @param primary: Whether this file is the primary one for the version, or the first file if there is no primary.
      */
     @Serializable
-    data class File(
+    data class MRFile(
         val hashes: Hashes,
         val url: String,
         val filename: String,

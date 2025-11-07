@@ -1,2 +1,1 @@
-rootProject.name = "Tritium"
-
+rootProject.name = "Tritium Minecraft Launcher"

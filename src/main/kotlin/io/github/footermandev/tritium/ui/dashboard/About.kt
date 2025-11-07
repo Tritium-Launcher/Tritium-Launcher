@@ -1,11 +1,9 @@
 package io.github.footermandev.tritium.ui.dashboard
 
-import io.github.footermandev.tritium.Constants
-import io.github.footermandev.tritium.dim
-import io.github.footermandev.tritium.sizedImg
-import io.github.footermandev.tritium.ui.theme.TIcons
+import io.github.footermandev.tritium.TConstants
 import java.awt.BorderLayout
 import java.awt.Color
+import java.awt.Dimension
 import java.awt.Font
 import javax.swing.BoxLayout
 import javax.swing.JLabel
@@ -20,16 +18,16 @@ internal class About : JPanel() {
     private val bg = UIManager.getColor("Panel.background").darker()
     init {
         layout = BorderLayout()
-        size = dim(60, 25)
+        size = Dimension(60, 25)
         background = bg
         alignmentX = CENTER_ALIGNMENT
 
-        val img = JLabel(sizedImg(TIcons.TritiumPng.image, 25, 25))
+        val img = JLabel()
         val textPanel = JPanel().apply {
             layout = BoxLayout(this, BoxLayout.Y_AXIS)
             background = bg
         }
-        val title = JLabel(Constants.TR).apply {
+        val title = JLabel(TConstants.TR).apply {
             font = Font("Arial", Font.BOLD, 12)
             foreground = Color.WHITE
         }

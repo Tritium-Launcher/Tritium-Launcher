@@ -1,118 +1,149 @@
 package io.github.footermandev.tritium.ui.dashboard
 
-import io.github.footermandev.tritium.Constants
-import io.github.footermandev.tritium.auth.MCProfile
+import io.github.footermandev.tritium.TConstants
 import io.github.footermandev.tritium.auth.MicrosoftAuth
 import io.github.footermandev.tritium.auth.ProfileMngr
-import io.github.footermandev.tritium.loadImage
-import io.github.footermandev.tritium.logger
-import io.github.footermandev.tritium.ui.components.insets
+import io.github.footermandev.tritium.loadImageQt
+import io.github.footermandev.tritium.m
+import io.github.footermandev.tritium.onClicked
+import io.qt.Nullable
+import io.qt.core.QObject
+import io.qt.core.QTimer
+import io.qt.gui.QCloseEvent
+import io.qt.gui.QPixmap
+import io.qt.widgets.*
 import kotlinx.coroutines.*
-import java.awt.GridBagConstraints
-import java.awt.GridBagLayout
-import javax.swing.*
+import java.util.concurrent.atomic.AtomicBoolean
 
-/**
- * Contains account information, and a way to sign in.
- *
- * Displays the user's Minecraft skin's face, MC username, and MC UUID.
- */
-@OptIn(DelicateCoroutinesApi::class)
-internal class AccountPanel() : JPanel() {
-    private val logger = logger()
-    @Volatile private var isLoading: Boolean = true
+class AccountPanel: QWidget() {
+    @Volatile
+    private var isLoading: Boolean = true
+
+    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+
+    private val isRefreshing = AtomicBoolean(false)
+
+    private val mainLayout = QVBoxLayout().apply {
+        contentsMargins = 0.m
+        widgetSpacing = 10
+    }
 
     init {
-        layout = BoxLayout(this, BoxLayout.Y_AXIS)
-        logger.info("Initializing account panel...")
-        refreshUI()
+        setLayout(mainLayout)
 
-        ProfileMngr.addListener { p ->
-            logger.info("Profile listener triggered. Profile: ${p?.name}")
+        this.destroyed.connect(this, "onWidgetDestroyed(QObject)")
+
+        ProfileMngr.addListener { _ ->
             isLoading = false
-            SwingUtilities.invokeLater {
-                refreshUI()
-            }
+            QTimer.singleShot(0) { refreshUI() }
         }
 
-        GlobalScope.launch(Dispatchers.IO) {
-            logger.info("Initial profile check started")
+        QTimer.singleShot(0) { refreshUI() }
+
+        scope.launch {
+            bgDashboardLogger.info("Initial profile check started")
             val profile = ProfileMngr.Cache.get()
-            if(profile != null) {
-                isLoading = false
-            }
-            logger.info("Initial profile check finished. Profile: ${profile?.name}")
-            SwingUtilities.invokeLater {
-                refreshUI()
-            }
+            if(profile != null) isLoading = false
+            QTimer.singleShot(0) { refreshUI() }
         }
     }
 
-    private fun createSignInPanel(): JPanel {
-        return JPanel().apply {
-            val btn = JButton("Sign in")
-            btn.addActionListener {
-                logger.info("Sign in button clicked")
-                GlobalScope.launch(Dispatchers.IO) {
-                    MicrosoftAuth().newSignIn { _ ->
-                        SwingUtilities.invokeLater {
-                            logger.info("Sign-in callback received.")
-                            isLoading = false
-                            refreshUI()
-                        }
-                    }
-                }
+    @Suppress("UNUSED_PARAMETER")
+    private fun onWidgetDestroyed(obj: QObject?) {
+        scope.cancel()
+    }
+
+    override fun closeEvent(event: @Nullable QCloseEvent?) {
+        try {
+            scope.cancel()
+        } finally {
+            super.closeEvent(event)
+        }
+    }
+
+    private fun clearLayout(layout: QLayout?) {
+        val l = layout ?: return
+        while(l.count() > 0) {
+            val item = l.takeAt(0) ?: continue
+            val widget = item.widget()
+            if(widget != null) {
+                widget.hide()
+                widget.setParent(null)
+                try { widget.dispose() } catch (_: Throwable) {}
+            } else {
+                clearLayout(item.layout())
             }
-            add(btn)
         }
     }
 
     private fun refreshUI() {
-        logger.info("Refreshing UI")
-        removeAll()
-        val profile = runBlocking { ProfileMngr.Cache.get() }
-        if(profile != null) add(updateUIWithProfile(profile))
-        else add(createSignInPanel())
-        revalidate()
-        repaint()
-    }
+        if(!isRefreshing.compareAndSet(false, true)) return
 
-    private fun updateUIWithProfile(profile: MCProfile): JPanel {
-        val accPanel = JPanel().apply {
-            layout = GridBagLayout()
-            val gbc = GridBagConstraints().apply {
-                fill = GridBagConstraints.HORIZONTAL
-                insets = insets(10)
-                gridx = 0
-                gridy = 0
-                anchor = GridBagConstraints.CENTER
-            }
+        scope.launch {
+            val profile = ProfileMngr.Cache.get()
 
-            val face = loadImage(Constants.FACE_URL + profile.id, 100, 100, true)
-            add(JLabel(face), gbc)
+            QTimer.singleShot(0) {
+                try {
+                    clearLayout(mainLayout)
 
-            val userName = JLabel(profile.name).apply {
-                font = font.deriveFont(18f)
-            }
-            gbc.gridy = 1
-            add(userName, gbc)
+                    if (profile != null) {
+                        val row = QWidget()
+                        val rowLayout = QHBoxLayout(row)
+                        rowLayout.widgetSpacing = 10
+                        rowLayout.contentsMargins = 10.m
 
-            val uuid = JLabel(profile.id).apply {
-                font = font.deriveFont(18f)
-            }
-            gbc.gridy = 2
-            add(uuid, gbc)
+                        val facePixmap: QPixmap? = try {
+                            loadImageQt(TConstants.FACE_URL + profile.id, 100, 100, true)
+                        } catch (_: Throwable) {
+                            QPixmap()
+                        }
 
-            val signOutBtn = JButton("Sign out").apply {
-                addActionListener {
-                    MicrosoftAuth().signOut()
-                    isLoading = false
-                    refreshUI()
+                        val faceLabel = QLabel()
+                        faceLabel.pixmap = facePixmap ?: QPixmap()
+                        rowLayout.addWidget(faceLabel)
+
+                        val nameLabel = QLabel(profile.name)
+                        nameLabel.styleSheet = "font-size: 18px;"
+                        rowLayout.addWidget(nameLabel, 1)
+
+                        val uuidLabel = QLabel(profile.id)
+                        uuidLabel.styleSheet = "font-size: 12px; color: gray;"
+                        rowLayout.addWidget(uuidLabel)
+
+                        val signOutBtn = QPushButton("Sign out").apply {
+                            onClicked {
+                                scope.launch {
+                                    MicrosoftAuth().signOut()
+                                    isLoading = false
+                                    QTimer.singleShot(0) { refreshUI() }
+                                }
+                            }
+                        }
+
+                        rowLayout.addWidget(signOutBtn)
+                        mainLayout.addWidget(row)
+                    } else {
+                        val signInBtn = QPushButton("Sign in")
+                        signInBtn.onClicked {
+                            dashboardLogger.info("Sign in flow started")
+                            scope.launch {
+                                MicrosoftAuth().newSignIn { _ ->
+                                    QTimer.singleShot(0) {
+                                        isLoading = false
+                                        refreshUI()
+                                    }
+                                }
+                            }
+                        }
+                        mainLayout.addWidget(signInBtn)
+                    }
+
+                    update()
+                    repaint()
+                } finally {
+                    isRefreshing.set(false)
                 }
             }
-            gbc.gridy = 3
-            add(signOutBtn, gbc)
         }
-        return accPanel
     }
 }

@@ -1,6 +1,6 @@
 package io.github.footermandev.tritium.platform
 
-import io.github.footermandev.tritium.Constants
+import io.github.footermandev.tritium.TConstants
 import java.io.File
 
 @Suppress("MemberVisibilityCanBePrivate")
@@ -21,7 +21,7 @@ object Platform {
     }
 
     fun getSettingsDir(): File {
-        val dir = File(sysSettingsDir, Constants.TR)
+        val dir = File(sysSettingsDir, TConstants.TR)
         if(!dir.exists()) dir.mkdirs()
         return dir
     }

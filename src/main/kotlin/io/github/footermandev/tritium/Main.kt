@@ -1,98 +1,99 @@
 package io.github.footermandev.tritium
 
-import com.formdev.flatlaf.FlatDarkLaf
-import com.formdev.flatlaf.util.SystemInfo
 import com.microsoft.aad.msal4j.SilentParameters
+import io.github.footermandev.tritium.TConstants.TR
 import io.github.footermandev.tritium.auth.MSAL
 import io.github.footermandev.tritium.auth.MicrosoftAuth
 import io.github.footermandev.tritium.auth.ProfileMngr
-import io.github.footermandev.tritium.core.Project
-import io.github.footermandev.tritium.core.ProjectMngr
-import io.github.footermandev.tritium.core.ProjectMngrListener
-import io.github.footermandev.tritium.keymap.KeymapService
+import io.github.footermandev.tritium.koin.Koin
+import io.github.footermandev.tritium.service.loadAllServices
 import io.github.footermandev.tritium.ui.dashboard.Dashboard
-import io.github.footermandev.tritium.ui.project.ProjectFrame
-import io.github.footermandev.tritium.ui.theme.TIcons
+import io.github.footermandev.tritium.ui.theme.ThemeMngr
+import io.qt.gui.QIcon
+import io.qt.widgets.QApplication
 import kotlinx.coroutines.DelicateCoroutinesApi
 import kotlinx.coroutines.GlobalScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.future.await
 import kotlinx.coroutines.launch
+import org.koin.core.context.startKoin
+import org.koin.logger.slf4jLogger
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
-import javax.swing.SwingUtilities
-import javax.swing.UIManager
 
-val mainLogger: Logger = LoggerFactory.getLogger(Constants.TR + "::Main")
+val mainLogger: Logger = LoggerFactory.getLogger("$TR::Main")
 
-fun main(args: Array<String>) {
-    mainLogger.info("Starting with args: ${args.joinToString(" ")}")
+@Volatile
+internal var appInstance: QApplication? = null
 
-    // Start the MSAL process
-    attemptAutoSignIn()
+val TApp: QApplication
+    get() = appInstance ?: throw IllegalStateException("QApplication not initialized.")
 
-    // Set up FlatLaf stuff
-    flatLaf()
 
-    // Set up keyboard stuff
-    KeymapService.init()
+class Main {
+    companion object {
 
-    ProjectMngr.addListener(object : ProjectMngrListener {
-        override fun onProjectCreated(project: Project) {}
-        override fun onProjectOpened(project: Project) {
-            ProjectFrame(project)
+        @JvmStatic
+        fun main(vararg args: String) {
+            mainLogger.info("Starting with args: ${args.joinToString(" ")}")
+
+            manageArguments(args.toList())
+            mainLogger.info(userHome)
+
+            Koin.app = startKoin {
+                slf4jLogger()
+                modules(
+                )
+            }
+
+            attemptAutoSignIn()
+
+            ThemeMngr.init()
+
+            mainLogger.info("Dashboard.NavBg -> ${ThemeMngr.getColorHex("Dashboard.NavBg")}")
+
+            if (QApplication.instance() == null) QApplication.initialize(args)
+            appInstance = QApplication.instance() as QApplication
+
+            QApplication.setWindowIcon(QIcon(resourceIcon("icons/tritium.png", TConstants.classLoader)!!))
+            QApplication.setDesktopFileName("tritium")
+            QApplication.setApplicationName("tritium")
+
+            loadAllServices()
+
+
+            Dashboard.createAndShow()
+
+            QApplication.exec()
+
+
         }
-        override fun onProjectDeleted(project: Project) {}
-        override fun onProjectUpdated(project: Project) {}
-        override fun onProjectFinishedLoading(projects: List<Project>) {}
-        override fun onProjectFailedToGenerate(
-            project: String,
-            errorMsg: String,
-            exception: Exception?
-        ) {}
-    })
-
-    ProjectMngr.loadActiveProject()
-
-    SwingUtilities.invokeLater {
-        if(ProjectMngr.activeProject == null) Dashboard()
     }
 }
 
 @OptIn(DelicateCoroutinesApi::class)
 private fun attemptAutoSignIn() {
     GlobalScope.launch {
-        try {
-            val accounts = MSAL.app.accounts.await()
-            val account = accounts.iterator().asSequence().firstOrNull()
-            if(account != null) {
-                val scopes = setOf("XboxLive.signin", "offline_access")
-                val params = SilentParameters.builder(scopes, account).build()
-                val result = MSAL.app.acquireTokenSilently(params).await()
+        while(true) {
+            try {
+                val accounts = MSAL.app.accounts.await()
+                val account = accounts.iterator().asSequence().firstOrNull()
+                if (account != null) {
+                    val scopes = setOf("XboxLive.signin", "offline_access")
+                    val params = SilentParameters.builder(scopes, account).build()
+                    val result = MSAL.app.acquireTokenSilently(params).await()
 
-                mainLogger.info("Silent sign-in succeeded.")
-                val mcToken = MicrosoftAuth().getMCToken(result.accessToken())
-                ProfileMngr.Cache.init(mcToken)
-            } else {
-                mainLogger.info("No accounts available.")
-                return@launch
+                    val mcToken = MicrosoftAuth().getMCToken(result.accessToken())
+                    ProfileMngr.Cache.init(mcToken)
+                } else {
+                    mainLogger.info("No accounts available.")
+                }
+
+                break
+            } catch (e: Exception) {
+                mainLogger.error("Sign-in failed, will retry in 60s: ${e.message}", e)
+                delay(60_000)
             }
-        } catch (e: Exception) {
-            mainLogger.error("Sign-in failed: ${e.message}", e)
-            throw e
         }
     }
-}
-
-fun flatLaf() {
-    if(SystemInfo.isMacOS) {
-        System.setProperty("apple.laf.useScreenMenuBar", "true")
-    }
-    UIManager.put("Component.hideMnemonics", false)
-
-    FlatDarkLaf.setup()
-
-    UIManager.put("TitlePane.closeIcon", TIcons.WindowIcons.Close)
-    UIManager.put("TitlePane.iconifyIcon", TIcons.WindowIcons.Iconify)
-    UIManager.put("TitlePane.maximizeIcon", TIcons.WindowIcons.RestoreMax)
-    UIManager.put("TitlePane.restoreIcon", TIcons.WindowIcons.RestoreMin)
 }

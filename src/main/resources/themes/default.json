@@ -1,0 +1,20 @@
+{
+  "meta": {
+    "id": "tritium-dark",
+    "name": "Tritium Dark",
+    "type": "dark",
+    "authors": ["FooterManDev"]
+  },
+  "colors": {
+    "Dashboard.NavBg": "#27392E",
+    "Dashboard.ProjectsBg": "#1C2D24",
+    "ButtonBg": "#323345",
+    "Accent": "#429848",
+    "Success": "#10B981",
+    "Warning": "#F59E0B",
+    "Error": "#F0463D"
+  },
+  "icons": {
+    "dashboard/new": "resource:/themes/icons/dark/dashboard/new.svg"
+  }
+}

@@ -1,19 +1,18 @@
 package io.github.footermandev.tritium.core.modpack
 
-import com.formdev.flatlaf.extras.FlatSVGIcon
-import com.google.auto.service.AutoService
 import io.github.footermandev.tritium.ui.theme.TIcons
+import io.qt.gui.QPixmap
 
-@AutoService(ModpackType::class)
 data class CurseForge(
     override val id: String = "curseforge",
     override val displayName: String = "CurseForge",
-    override val icon: FlatSVGIcon = TIcons.CurseForge,
+    override val icon: QPixmap = TIcons.CurseForge,
     override val webpage: String = "https://www.curseforge.com/"
-) : ModpackType() {
+) : ModpackSource() {
     override fun toString(): String = id
 
-    init {
-        types.add(this)
-    }
+//    @AutoService(ModpackSource.Provider::class)
+//    internal class Provider: ModpackSource.Provider {
+//        override fun create(): ModpackSource = Modrinth()
+//    }
 }

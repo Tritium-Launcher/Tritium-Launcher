@@ -3,11 +3,13 @@ package io.github.footermandev.tritium.auth
 import com.microsoft.aad.msal4j.IAccount
 import com.microsoft.aad.msal4j.InteractiveRequestParameters
 import com.microsoft.aad.msal4j.SilentParameters
+import io.github.footermandev.tritium.debugLogging
 import io.github.footermandev.tritium.logger
 import io.github.footermandev.tritium.toURI
 import io.ktor.client.*
 import io.ktor.client.call.*
 import io.ktor.client.engine.cio.*
+import io.ktor.client.network.sockets.*
 import io.ktor.client.plugins.contentnegotiation.*
 import io.ktor.client.request.*
 import io.ktor.client.statement.*
@@ -24,12 +26,13 @@ import java.util.concurrent.CompletableFuture
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
+val authLogger = logger("Auth")
+
 /**
  * Handles Microsoft and Xbox Live authentication for Minecraft.
  * Implements OAuth2 flow for Microsoft accounts and manages token lifecycle.
  */
 class MicrosoftAuth {
-    private val logger = logger()
     private val json = Json { ignoreUnknownKeys = true }
     private val httpClient = HttpClient(CIO) {
         install(ContentNegotiation) {
@@ -64,12 +67,12 @@ class MicrosoftAuth {
      * @param onSignedIn Callback function called with the Minecraft profile after successful sign-in
      * @throws AuthenticationException if sign-in fails after all retry attempts
      */
-    suspend fun newSignIn(onSignedIn: (MCProfile?) -> Unit) {
+    suspend fun newSignIn(onSignedIn: (MCProfile?) -> Unit)  {
         var lastException: Exception? = null
         
         for (attempt in 1..MAX_RETRY_ATTEMPTS) {
             try {
-                logger.info("Starting sign-in flow (attempt $attempt)...")
+                authLogger.info("Starting sign-in flow (attempt $attempt)...")
                 val scopes = setOf("XboxLive.signin", "offline_access")
                 val parameters = InteractiveRequestParameters.builder("http://localhost".toURI())
                     .scopes(scopes)
@@ -77,13 +80,13 @@ class MicrosoftAuth {
 
                 val result = MSAL.app.acquireToken(parameters).await()
                 msalAcc = result.account()
-                logger.info("MS token acquired; expires at ${result.expiresOnDate()}")
+                authLogger.info("MS token acquired; expires at ${result.expiresOnDate()}")
 
                 val (xblToken, hash) = authWithLive(result.accessToken())
                 val xstsToken = authWithXSTS(xblToken)
                 val mcToken = getMCToken(xstsToken, hash)
 
-                logger.info("Sign-in successful. MC token obtained.")
+                authLogger.info("Sign-in successful. MC token obtained.")
 
                 ProfileMngr.Cache.init(mcToken)
                 val profile = ProfileMngr.Cache.get()
@@ -91,7 +94,7 @@ class MicrosoftAuth {
                 return
             } catch (e: Exception) {
                 lastException = e
-                logger.error("Sign-in attempt $attempt failed: ${e.message}", e)
+                authLogger.error("Sign-in attempt $attempt failed: ${e.message}", e)
                 if (attempt < MAX_RETRY_ATTEMPTS) {
                     delay(RETRY_DELAY_MS)
                 }
@@ -110,14 +113,14 @@ class MicrosoftAuth {
     suspend fun ensureValidAccessToken(): String {
         val account = msalAcc ?: throw IllegalStateException("No signed-in account; sign in required.")
         return try {
-            logger.info("Refreshing token silently...")
+            authLogger.info("Refreshing token silently...")
             val scopes = setOf("XboxLive.signin", "offline_access")
             val silentParams = SilentParameters.builder(scopes, account).build()
             val result = MSAL.app.acquireTokenSilently(silentParams).await()
-            logger.info("Token refreshed silently; new expiry: ${result.expiresOnDate()}")
+            authLogger.info("Token refreshed silently; new expiry: ${result.expiresOnDate()}")
             result.accessToken()
         } catch (e: Exception) {
-            logger.error("Silent token refresh failed: ${e.message}", e)
+            authLogger.error("Silent token refresh failed: ${e.message}", e)
             signOut()
             throw TokenException("Silent token refresh failed", e)
         }
@@ -172,15 +175,15 @@ class MicrosoftAuth {
 
             if(response.status != HttpStatusCode.OK) {
                 val errBody = response.bodyAsText()
-                logger.error("XBL authentication failed with HTTP status ${response.status.value}: $errBody")
+                authLogger.error("XBL authentication failed with HTTP status ${response.status.value}: $errBody")
                 throw AuthenticationException("XBL authentication failed with HTTP status ${response.status.value}")
             }
 
-            logger.info("XBL auth response received: ${response.bodyAsText()}")
+            debug("XBL auth response received: ${response.bodyAsText()}")
             val xblResponse: XblTokenResponse = try {
                 json.decodeFromString(XblTokenResponse.serializer(), response.bodyAsText())
             } catch (e: Exception) {
-                logger.error("Failed to parse XBL auth response: ${e.message}", e)
+                authLogger.error("Failed to parse XBL auth response: ${e.message}", e)
                 throw AuthenticationException("XBL auth response parsing failed", e)
             }
 
@@ -189,7 +192,7 @@ class MicrosoftAuth {
 
             Pair(xblToken, hash)
         } catch (e: Exception) {
-            logger.error("Error in authWithLive: ${e.message}", e)
+            authLogger.error("Error in authWithLive: ${e.message}", e)
             throw AuthenticationException("XBL authentication failed", e)
         }
     }
@@ -218,27 +221,27 @@ class MicrosoftAuth {
 
             if(response.status != HttpStatusCode.OK) {
                 val errBody = response.bodyAsText()
-                logger.error("XSTS authentication failed with HTTP status ${response.status.value}: $errBody")
+                authLogger.error("XSTS authentication failed with HTTP status ${response.status.value}: $errBody")
                 throw AuthenticationException("XSTS authentication failed with HTTP status ${response.status.value}")
             }
 
-            logger.info("XSTS auth response received: ${response.bodyAsText()}")
+            debug("XSTS auth response received: ${response.bodyAsText()}")
             val xstsResponse: XstsTokenResponse = try {
                 json.decodeFromString(XstsTokenResponse.serializer(), response.bodyAsText())
             } catch (e: Exception) {
-                logger.error("Failed to parse XSTS auth response: ${e.message}", e)
+                authLogger.error("Failed to parse XSTS auth response: ${e.message}", e)
                 throw AuthenticationException("XSTS auth response parsing failed", e)
             }
 
             xstsResponse.token
         } catch (e: Exception) {
-            logger.error("Error in authWithXSTS: ${e.message}", e)
+            authLogger.error("Error in authWithXSTS: ${e.message}", e)
             throw AuthenticationException("XSTS authentication failed", e)
         }
     }
 
     /**
-     * Obtains a Minecraft token from an XSTS token and user hash.
+     * Gets a Minecraft token from an XSTS token and user hashes.
      * @param token the XSTS token
      * @param hash the user hash
      * @return the Minecraft token
@@ -257,22 +260,23 @@ class MicrosoftAuth {
 
             if (response.status != HttpStatusCode.OK) {
                 val errBody = response.bodyAsText()
-                logger.error("MC authentication failed with HTTP status ${response.status.value}: $errBody")
+                authLogger.error("MC authentication failed with HTTP status ${response.status.value}: $errBody")
                 throw TokenException("MC authentication failed with HTTP status ${response.status.value}")
             }
 
             val responseBody = response.bodyAsText()
-            logger.info("MC auth response received: $responseBody")
+            debug("MC auth response received: $responseBody", debugLogging)
             val authResponse: MCAuthResponse = try {
                 json.decodeFromString(MCAuthResponse.serializer(), responseBody)
             } catch (e: Exception) {
-                logger.error("Failed to parse MC auth response: ${e.message}", e)
+                authLogger.error("Failed to parse MC auth response: ${e.message}", e)
                 throw TokenException("MC auth response parsing failed", e)
             }
 
             authResponse.accessToken
+        } catch (e: ConnectTimeoutException) {
+            throw TokenException("Could not get MC Token due to time-out from Microsoft", e)
         } catch (e: Exception) {
-            logger.error("Error in getMCToken: ${e.message}", e)
             throw TokenException("MC token refresh failed", e)
         }
     }
@@ -286,7 +290,7 @@ class MicrosoftAuth {
         }
         msalAcc = null
         ProfileMngr.Cache.clear()
-        logger.info("User signed out.")
+        authLogger.info("User signed out.")
     }
 
     /**
@@ -297,15 +301,15 @@ class MicrosoftAuth {
         return try {
             val response = httpClient.get("https://piston-meta.mojang.com/mc/game/version_manifest_v2.json")
             val body = response.bodyAsText()
-            logger.info("Successfully fetched MC version manifest.")
+            authLogger.info("Successfully fetched MC version manifest.")
 
             val manifest: VersionManifest = json.decodeFromString(body)
 
             val releases = manifest.versions.filter { it.type == "release" }
-            logger.info("Filtered ${releases.size} release versions from the MC version manifest.")
+            authLogger.info("Filtered ${releases.size} release versions from the MC version manifest.")
             releases
         } catch (e: Exception) {
-            logger.error("Error fetching Minecraft versions", e)
+            authLogger.error("Error fetching Minecraft versions", e)
             null
         }
     }
@@ -318,22 +322,24 @@ class MicrosoftAuth {
      */
     suspend fun downloadMinecraftVersion(version: MCVersion, destination: String): Boolean? {
         return try {
-            logger.info("Downloading Minecraft '${version.id}' from ${version.url}")
+            authLogger.info("Downloading Minecraft '${version.id}' from ${version.url}")
 
             val content: ByteArray = httpClient.get(version.url).body()
 
             val file = File("$destination/${version.id}.jar")
             file.parentFile.mkdirs()
             file.writeBytes(content)
-            logger.info("Downloaded Minecraft '${version.id}' to ${file.absolutePath}")
+            authLogger.info("Downloaded Minecraft '${version.id}' to ${file.absolutePath}")
             true
         } catch (e: Exception) {
-            logger.error("Failed to download Minecraft ${version.id}", e)
+            authLogger.error("Failed to download Minecraft ${version.id}", e)
             false
         }
 
     }
 }
+
+private fun debug(msg: String, condition: Boolean = false) { if(condition) authLogger.debug(msg) }
 
 /**
  * Custom exception for authentication-related errors

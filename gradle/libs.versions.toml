@@ -1,21 +1,25 @@
 [versions]
-kotlin = "2.1.21"
+kotlin = "2.2.20"
+kotlinx = "1.9.0"
 flatlaf = "3.6"
 jsvg = "1.4.0"
-ktor = "3.1.3"
+ktor = "3.3.1"
 ktoml = "0.7.0"
-msal = "1.20.1"
-logback = "1.5.18"
-ksp = "2.1.20-1.0.31"
+msal = "1.23.1"
+logback = "1.5.19"
+rsyntax = "3.6.0"
+ksp = "2.2.20-2.0.4"
 autoservice = "1.1.1"
 autoservice-ksp = "1.2.0"
-koin = "4.0.4"
-koin-annotations = "2.0.1-RC1"
+koin = "4.1.1"
+koin-annotations = "2.2.0"
+qt = "6.10.0"
 
 [libraries]
 # Kotlin
 kotlin-stdlib = { module = "org.jetbrains.kotlin:kotlin-stdlib", version.ref = "kotlin" }
 kotlin-reflect = { module = "org.jetbrains.kotlin:kotlin-reflect", version.ref = "kotlin" }
+kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "kotlinx" }
 kotlin-scripting-common = { module = "org.jetbrains.kotlin:kotlin-scripting-common", version.ref = "kotlin" }
 kotlin-scripting-jvm = { module = "org.jetbrains.kotlin:kotlin-scripting-jvm", version.ref = "kotlin" }
 kotlin-scripting-host = { module = "org.jetbrains.kotlin:kotlin-scripting-jvm-host", version.ref = "kotlin" }
@@ -32,10 +36,9 @@ koin = { module = "io.insert-koin:koin-core", version.ref = "koin"}
 koin-slf4j = { module = "io.insert-koin:koin-logger-slf4j", version.ref = "koin" }
 koin-annotations = { module = "io.insert-koin:koin-annotations", version.ref = "koin-annotations" }
 
-# FlatLaf
-flatlaf = { module = "com.formdev:flatlaf", version.ref = "flatlaf" }
-flatlaf-extras = { module = "com.formdev:flatlaf-extras", version.ref = "flatlaf" }
-jsvg = { module = "com.github.weisj:jsvg", version.ref = "jsvg" }
+# Qt Jambi
+qtjambi = { module = "io.qtjambi:qtjambi", version.ref = "qt"}
+qtjambi-svg = { module = "io.qtjambi:qtjambi-svg", version.ref = "qt"}
 
 # Ktor
 ktor-client-core = { module = "io.ktor:ktor-client-core", version.ref = "ktor" }
@@ -47,12 +50,13 @@ ktor-client-content-negotiation = { module = "io.ktor:ktor-client-content-negoti
 ktor-serialization-kotlinx-json = { module = "io.ktor:ktor-serialization-kotlinx-json", version.ref = "ktor" }
 ktor-client-serialization = { module = "io.ktor:ktor-client-serialization", version.ref = "ktor" }
 
-# kToml
-ktoml-core = { module = "com.akuleshov7:ktoml-core", version.ref = "ktoml" }
-ktoml-file = { module = "com.akuleshov7:ktoml-file", version.ref = "ktoml" }
-
 # MSAL4J
 msal4j = { module = "com.microsoft.azure:msal4j", version.ref = "msal" }
 
 # Logback
 logback-classic = { module = "ch.qos.logback:logback-classic", version.ref = "logback" }
+
+[plugins]
+ksp = { id = "com.google.devtools.ksp", version.ref = "ksp" }
+kotlin = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
+serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }

@@ -12,24 +12,24 @@ import io.ktor.client.plugins.contentnegotiation.*
 import io.ktor.client.request.*
 import io.ktor.client.statement.*
 import io.ktor.serialization.kotlinx.json.*
+import io.qt.gui.QPixmap
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
 import java.io.File
 import java.net.URI
-import javax.swing.ImageIcon
 import javax.xml.parsers.DocumentBuilderFactory
 
 /**
  * Fabric Mod Loader
  */
-@AutoService(ModLoader::class)
+
 class Fabric : ModLoader() {
     override val id: String = "fabric"
     override val displayName: String = "Fabric"
     override val repository: URI = "https://maven.fabricmc.net/net/fabricmc/fabric-loader".toURI()
     override val oldestVersion: String = "1.14"
-    override val icon: ImageIcon
+    override val icon: QPixmap
         get() = TIcons.Fabric
 
     val dir = File(INSTALL_DIR, id)
@@ -39,7 +39,6 @@ class Fabric : ModLoader() {
     private val logger = logger()
 
     init {
-        register(this)
         if(!dir.exists()) {
             if(dir.mkdirs()) {
                 logger.info("Created Fabric install directory: ${dir.absolutePath}")
@@ -185,4 +184,10 @@ class Fabric : ModLoader() {
             .mapNotNull { it.toIntOrNull() }
             .joinToString(".")
     }
+
+    @AutoService(ModLoader.Provider::class)
+    internal class Provider: ModLoader.Provider {
+        override fun create(): ModLoader = Fabric()
+    }
 }
+
