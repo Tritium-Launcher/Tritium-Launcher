@@ -1,5 +1,8 @@
 package io.github.footermandev.tritium.core.project
 
+/**
+ * Listener for project lifecycle events.
+ */
 interface ProjectMngrListener {
     fun onProjectCreated(project: ProjectBase)
     fun onProjectOpened(project: ProjectBase)

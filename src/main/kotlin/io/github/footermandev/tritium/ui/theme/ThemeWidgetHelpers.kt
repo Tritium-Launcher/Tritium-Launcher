@@ -23,15 +23,6 @@ enum class ColorPart {
     PressedFg;
 }
 
-fun colorForWidget(colorKey: String, vararg parts: ColorPart): String? {
-    val hex = ThemeMngr.getColorHex(colorKey) ?: return null
-    return buildStyleFragment(null, hex, parts)
-}
-
-//fun QWidget.inheritParentTheme(): () -> Unit {
-//
-//}
-
 fun QWidget.applyThemeStyle(colorKey: String, vararg parts: ColorPart) = applyThemeStyleTo(this, colorKey, *parts)
 
 fun applyThemeStyleTo(widget: QWidget, colorKey: String, vararg parts: ColorPart): () -> Unit {
@@ -111,9 +102,6 @@ fun applyThemeStyleTo(widget: QWidget, colorKey: String, vararg parts: ColorPart
         removeGlobalFragment(globalMarkerStart, globalMarkerEnd)
     }
 }
-
-private val inlineInjectRegex = Regex("/\\*theme-widget-style-start:[^*]+\\*/.*?/\\*theme-widget-style-end:[^*]+\\*/", RegexOption.DOT_MATCHES_ALL)
-private val globalInjectRegex = Regex("/\\*theme-global-style-start:[^*]+\\*/.*?/\\*theme-global-style-end:[^*]+\\*/", RegexOption.DOT_MATCHES_ALL)
 
 private fun ensureObjName(widget: QWidget): String {
     val current = widget.objectName

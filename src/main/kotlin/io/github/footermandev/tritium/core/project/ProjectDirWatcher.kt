@@ -1,104 +1,77 @@
 package io.github.footermandev.tritium.core.project
 
+import io.github.footermandev.tritium.coroutines.UIDispatcher
 import io.github.footermandev.tritium.debugLogging
+import io.github.footermandev.tritium.io.VPath
+import io.github.footermandev.tritium.io.VWatchEvent
+import io.github.footermandev.tritium.io.VWatchOptions
+import io.github.footermandev.tritium.io.watchAsFlow
 import io.github.footermandev.tritium.logger
 import kotlinx.coroutines.*
-import java.nio.file.*
-import java.nio.file.StandardWatchEventKinds.*
 
-class ProjectDirWatcher(private val rootDir: Path) {
-    private val log = logger()
-    private fun debug(msg: String, condition: Boolean = debugLogging) { if(condition) log.debug(msg) }
-    private val service = FileSystems.getDefault().newWatchService()
-    private val keys = mutableMapOf<WatchKey, Path>()
+/**
+ * Watches a project directory and debounces change notifications.
+ *
+ * @param rootDir Project root to watch.
+ * @param onChangeDispatcher Dispatcher for UI callbacks.
+ */
+class ProjectDirWatcher(
+    private val rootDir: VPath,
+    private val onChangeDispatcher: CoroutineDispatcher = UIDispatcher,
+) {
+    private val logger = logger()
+    private fun debug(msg: String, throwable: Throwable, condition: Boolean = debugLogging) { if(condition) logger.debug(msg, throwable) }
+    private fun debug(msg: String, condition: Boolean = debugLogging) { if(condition) logger.debug(msg) }
+
     private var job: Job? = null
 
-    init {
-        Files.walk(rootDir)
-            .filter { Files.isDirectory(it) }
-            .forEach { registerDir(it) }
-    }
-
-    private fun registerDir(dir: Path) {
-        try {
-            val key = dir.register(service, ENTRY_CREATE, ENTRY_DELETE, ENTRY_MODIFY)
-            keys[key] = dir
-            debug("Registered directory for watch: ${dir.toAbsolutePath()}")
-        } catch (e: Exception) {
-            debug("Failed to register directory ${dir.toAbsolutePath()}: ${e.message}")
-        }
-    }
-
+    /**
+     * Start watching the directory.
+     *
+     * @param onChange Called after a debounced change.
+     * @param debounceMillis Debounce interval in milliseconds.
+     */
     fun start(onChange: () -> Unit, debounceMillis: Long = 200L) {
-        debug("Starting ProjectDirWatcher for ${rootDir.toAbsolutePath()}")
+        debug("Starting ProjectDirWatcher for ${rootDir.toAbsolute()}")
 
-
-
-        job = CoroutineScope(Dispatchers.IO).launch {
+        job?.cancel()
+        job = CoroutineScope(Dispatchers.IO + SupervisorJob()).launch {
             var debounceJob: Job? = null
-
             try {
-                while (isActive) {
-                    val key = try {
-                        service.take()
-                    } catch (_: ClosedWatchServiceException) {
-                        break
-                    }
+                val flow = rootDir.watchAsFlow(VWatchOptions(true))
 
-                    val dir = keys[key] ?: run {
-                        if (!key.reset()) keys.remove(key)
-                        continue
-                    }
-
-                    var overflow = false
-                    for (e in key.pollEvents()) {
-                        val kind = e.kind()
-                        if (kind == OVERFLOW) {
-                            overflow = true
-                            continue
-                        }
-
-                        val nameObj = e.context()
-                        val namePath = nameObj as? Path ?: continue
-                        val child = dir.resolve(namePath)
-
-                        if (kind == ENTRY_CREATE) {
-                            try {
-                                if (Files.isDirectory(child)) registerDir(child)
-                            } catch (_: Exception) { }
-                        }
-                    }
-
-                    if (overflow) {
+                flow.collect { e ->
+                    if(e.kind == VWatchEvent.Kind.Overflow) {
                         debounceJob?.cancel()
                         debounceJob = null
-                        withContext(NonCancellable) { onChange() }
-                    } else {
-                        debounceJob?.cancel()
-                        debounceJob = launch {
-                            delay(debounceMillis)
-                            withContext(NonCancellable) { onChange() }
-                        }
+                        withContext(onChangeDispatcher) { onChange() }
+                        return@collect
                     }
 
-                    if (!key.reset()) {
-                        keys.remove(key)
-                        if (keys.isEmpty()) break
+                    debounceJob?.cancel()
+                    debounceJob = launch {
+                        delay(debounceMillis)
+                        withContext(onChangeDispatcher) { onChange() }
                     }
                 }
-            } finally {
-                service.close()
+            } catch (e: CancellationException) {
+                debug("ProjectDirWatcher cancelled for '$rootDir'", e)
+            } catch (t: Throwable) {
+                logger.warn("ProjectDirWatcher loop terminated due to exception", t)
             }
         }
     }
 
+    /**
+     * Stop watching the directory.
+     */
     fun stop() {
-        debug("Stopping ProjectDirWatcher for ${rootDir.toAbsolutePath()}")
+        debug("Stopping ProjectDirWatcher for '$rootDir'")
         try {
             job?.cancel()
             job = null
-        } finally {
-            try { service.close() } catch (_: Exception) {}
+        } catch (e: Exception) {
+            logger.warn("Exception stopping ProjectDirWatcher", e)
         }
     }
 }

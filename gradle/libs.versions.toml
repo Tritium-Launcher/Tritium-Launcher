@@ -1,25 +1,31 @@
 [versions]
 kotlin = "2.2.20"
-kotlinx = "1.9.0"
-flatlaf = "3.6"
-jsvg = "1.4.0"
+kotlinx-serialization = "1.9.0"
+kotlinx-coroutines = "1.10.2"
 ktor = "3.3.1"
-ktoml = "0.7.0"
 msal = "1.23.1"
-logback = "1.5.19"
-rsyntax = "3.6.0"
+msal-persistence = "1.3.0"
+logback = "1.5.27"
 ksp = "2.2.20-2.0.4"
 autoservice = "1.1.1"
 autoservice-ksp = "1.2.0"
 koin = "4.1.1"
 koin-annotations = "2.2.0"
-qt = "6.10.0"
+qt = "6.9.3"
+lsp4j = "0.24.0"
+jna = "5.13.0"
+
+# Test
+kotest = "6.0.7"
+mockk = "1.14.7"
+junit = "6.0.1"
 
 [libraries]
 # Kotlin
 kotlin-stdlib = { module = "org.jetbrains.kotlin:kotlin-stdlib", version.ref = "kotlin" }
 kotlin-reflect = { module = "org.jetbrains.kotlin:kotlin-reflect", version.ref = "kotlin" }
-kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "kotlinx" }
+kotlinx-serialization-json = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "kotlinx-serialization" }
+kotlinx-coroutines-core = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "kotlinx-coroutines" }
 kotlin-scripting-common = { module = "org.jetbrains.kotlin:kotlin-scripting-common", version.ref = "kotlin" }
 kotlin-scripting-jvm = { module = "org.jetbrains.kotlin:kotlin-scripting-jvm", version.ref = "kotlin" }
 kotlin-scripting-host = { module = "org.jetbrains.kotlin:kotlin-scripting-jvm-host", version.ref = "kotlin" }
@@ -47,16 +53,49 @@ ktor-client-auth = { module = "io.ktor:ktor-client-auth", version.ref = "ktor" }
 ktor-client-json = { module = "io.ktor:ktor-client-json", version.ref = "ktor" }
 ktor-client-logging = { module = "io.ktor:ktor-client-logging", version.ref = "ktor" }
 ktor-client-content-negotiation = { module = "io.ktor:ktor-client-content-negotiation", version.ref = "ktor" }
-ktor-serialization-kotlinx-json = { module = "io.ktor:ktor-serialization-kotlinx-json", version.ref = "ktor" }
 ktor-client-serialization = { module = "io.ktor:ktor-client-serialization", version.ref = "ktor" }
+ktor-serialization-kotlinx-json = { module = "io.ktor:ktor-serialization-kotlinx-json", version.ref = "ktor" }
+
+ktor-server-core = { module = "io.ktor:ktor-server-core", version.ref = "ktor" }
+ktor-server-netty = { module = "io.ktor:ktor-server-netty", version.ref = "ktor" }
 
 # MSAL4J
 msal4j = { module = "com.microsoft.azure:msal4j", version.ref = "msal" }
+msal4j-persistence = { module = "com.microsoft.azure:msal4j-persistence-extension", version.ref = "msal-persistence"}
 
 # Logback
 logback-classic = { module = "ch.qos.logback:logback-classic", version.ref = "logback" }
+
+# LSP
+lsp4j = { module = "org.eclipse.lsp4j:org.eclipse.lsp4j", version.ref = "lsp4j" }
+
+# JNA
+jna = { group = "net.java.dev.jna", name = "jna", version.ref = "jna" }
+jna-platform = { group = "net.java.dev.jna", name = "jna-platform", version.ref = "jna" }
+
+# Testing
+
+kotlinx-coroutines-test = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-test", version.ref = "kotlinx-coroutines"}
+kotest-assersions-core = { module = "io.kotest:kotest-assertions-core-jvm", version.ref = "kotest" }
+mockk = { module = "io.mockk:mockk", version.ref = "mockk" }
+kotlin-test-junit = { module = "org.jetbrains.kotlin:kotlin-test-junit5", version.ref = "kotlin" }
+ktor-client-mock = { module = "io.ktor:ktor-client-mock", version.ref = "ktor" }
+junit-jupiter-api = { module = "org.junit.jupiter:junit-jupiter-api", version.ref = "junit" }
+junit-jupiter-engine = { module = "org.junit.jupiter:junit-jupiter-engine", version.ref = "junit" }
 
 [plugins]
 ksp = { id = "com.google.devtools.ksp", version.ref = "ksp" }
 kotlin = { id = "org.jetbrains.kotlin.jvm", version.ref = "kotlin" }
 serialization = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
+
+[bundles]
+test = [
+    "kotlinx-coroutines-test",
+    "kotlinx-serialization-json",
+    "kotlin-test-junit",
+    "ktor-client-mock",
+    "kotest-assersions-core",
+    "mockk",
+    "junit-jupiter-api",
+    "junit-jupiter-engine"
+]

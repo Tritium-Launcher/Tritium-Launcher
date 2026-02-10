@@ -1,163 +1,148 @@
 package io.github.footermandev.tritium.ui.theme
 
-import io.github.footermandev.tritium.mainLogger
+import io.github.footermandev.tritium.currentDpr
 import io.github.footermandev.tritium.qs
-import io.qt.core.QByteArray
-import io.qt.core.QRectF
-import io.qt.core.QSize
+import io.github.footermandev.tritium.referenceWidget
 import io.qt.core.Qt
-import io.qt.gui.*
-import io.qt.svg.QSvgRenderer
+import io.qt.gui.QIcon
+import io.qt.gui.QPixmap
+import io.qt.widgets.QWidget
+import java.util.concurrent.ConcurrentHashMap
+import kotlin.math.ceil
 
+/**
+ * Default icons used throughout Tritium, including get methods.
+ */
 object TIcons {
-    val Tritium = pix("icons/tritium.svg", 16, 16)
+    private val cached = ConcurrentHashMap<String, QIcon>()
+
+    init {
+        ThemeMngr.addListener {
+            cached.clear()
+        }
+    }
+
+    val Tritium get() = pix("ui/tritium", 16, 16)
 
     /* File Icons */
-    val File       = pix("icons/file.svg", 16, 16)
-    val Folder     = pix("icons/folder.svg", 16, 16)
-    val Image      = pix("icons/image.svg", 16, 16)
-    val CSV        = pix("icons/csv.svg", 16, 16)
-    val HTML       = pix("icons/html.svg", 16, 16)
-    val JavaScript = pix("icons/javascript.svg", 16, 16)
-    val TypeScript = pix("icons/typescript.svg", 16, 16)
-    val JSON       = pix("icons/json.svg", 16, 16)
-    val TOML       = pix("icons/toml.svg", 16, 16)
-    val Archive    = pix("icons/archive.svg", 16, 16)
-    val Markdown   = pix("icons/markdown.svg", 16, 16)
+    val File       get() = pix("file/file", 16, 16)
+    val Folder     get() = pix("file/folder", 16, 16)
+    val CSV        get() = pix("file/csv", 16, 16)
+    val HTML       get() = pix("file/html", 16, 16)
+    val JavaScript get() = pix("file/javascript", 16, 16)
+    val TypeScript get() = pix("file/typescript", 16, 16)
+    val Image      get() = pix("file/image", 16, 16)
+    val JSON       get() = pix("file/json", 16, 16)
+    val TOML       get() = pix("file/toml", 16, 16)
+    val Archive    get() = pix("file/archive", 16, 16)
+    val Jar        get() = pix("file/jar", 16, 16)
+    val Markdown   get() = pix("file/markdown", 16, 16)
+    val CSS        get() = pix("file/css", 16, 16)
+    val Python     get() = pix("file/py", 16, 16)
+    val YAML       get() = pix("file/yaml", 16, 16)
+    val NPM        get() = pix("file/npm", 16, 16)
+    val Shell      get() = pix("file/shell", 16, 16)
+    val Powershell get() = pix("file/powershell", 16, 16)
 
-    val ModConfig   = pix("icons/config.svg", 16, 16)
-    val TrMeta      = pix("icons/tr_config.svg", 16, 16)
-    val WorldBackup = pix("icons/world_backup.svg", 16, 16)
-    val PlayerData  = pix("icons/player_data.svg", 16, 16)
-    val KubeScript  = pix("icons/kube.svg", 16, 16)
-    val ZenScript   = pix("icons/zenscript.svg", 16, 16)
+    val ModConfig   get() = pix("file/config", 16, 16)
+    val TrMeta      get() = pix("file/tr_config", 16, 16)
+    val WorldBackup get() = pix("file/world_backup", 16, 16)
+    val PlayerData  get() = pix("file/player_data", 16, 16)
+    val KubeScript  get() = pix("file/kube", 16, 16)
+    val ZenScript   get() = pix("file/zenscript", 16, 16)
+    val SessionLock get() = pix("file/lock_file", 16, 16)
+    val AnvilRegion get() = pix("file/region_file", 16, 16)
+    val McFunction  get() = pix("file/mcfunction", 16, 16)
+    val Schematic   get() = pix("file/schematic", 16, 16)
+    val NBT         get() = pix("file/nbt", 16, 16)
 
     // Menu Icons
-    val CurseForge = pix("icons/curseforge.svg")
-    val Modrinth   = pix("icons/modrinth.svg")
+    val CurseForge get() = pix("ui/curseforge")
+    val Modrinth   get() = pix("ui/modrinth")
 
-    val Fabric = pix("icons/fabric.svg")
+    val Fabric get() = pix("ui/fabric")
+    val NeoForge get() = pix("ui/neoforge")
 
-    val NewProject  = pix("icons/new_project.svg", 32, 32)
-    val Import      = pix("icons/folder-import.svg", 32, 32)
-    val Git         = pix("icons/git.svg", 32, 32)
-    val Search      = pix("icons/search.svg", 32, 32)
-    val CloseSearch = pix("icons/close_search.svg", 32, 32)
-    val ListView    = pix("icons/list_view.svg")
-    val GridView    = pix("icons/grid_view.svg")
-    val CompactView = pix("icons/compact_view.svg")
+    val QuestionMark get() = pix("ui/question")
 
-    val Build = pix("icons/build.svg", 16, 16)
-    val Run   = pix("icons/run.svg", 16, 16)
+    val NewProject  get() = pix("dashboard/new_project", 32, 32)
+    val Import      get() = pix("dashboard/folder_import", 32, 32)
+    val Git         get() = pix("dashboard/git", 32, 32)
+    val Search      get() = pix("dashboard/search", 32, 32)
+    val ListView    get() = pix("dashboard/list_view")
+    val GridView    get() = pix("dashboard/grid_view")
+    val CompactView get() = pix("dashboard/compact_view")
+    val Microsoft   get() = pix("dashboard/microsoft", 32, 32)
+    val SmallGrass  get() = pix("dashboard/tiny_grass", 32, 32)
 
-    val NPM   = pix("icons/npm.svg", 16, 16)
-    val Shell = pix("icons/shell.svg", 16, 16)
+    val Build get() = pix("menu/build", 16, 16)
+    val Run   get() = pix("menu/run", 16, 16)
 
-    private fun icon(resourcePath: String, size: QSize? = null): QIcon {
-        val svgIcon = tryLoadSvg(resourcePath, size)
-        if(svgIcon != null) return QIcon(svgIcon)
+    val Cross          get() = pix("ui/cross", 16, 16)
+    val SmallCross     get() = pix("ui/small_cross", 16, 16)
+    val SmallArrowDown get() = pix("ui/small_arrow_down", 16, 16)
+    val SmallPause     get() = pix("ui/small_pause", 16, 16)
+    val SmallPlay      get() = pix("ui/small_play", 16, 16)
 
-        val pix = tryLoadPixmap(resourcePath, size)
-        if(pix != null) return QIcon(pix)
+    private fun icon(keyOrPath: String, width: Int? = null, height: Int? = null): QIcon {
+        val dpr = try {
+            currentDpr(referenceWidget)
+        } catch (_: Throwable) { 1.0 }
 
-        val pngPath = resourcePath.replace(Regex("\\.svg$"), ".png")
-        val pngPix = tryLoadPixmap(pngPath, size)
-        if(pngPix != null) return QIcon(pngPix)
+        val baseW = width ?: 16
+        val baseH = height ?: baseW
 
-        mainLogger.warn("Failed to create icon from '$resourcePath'")
-        return QIcon()
-    }
+        val physW = ceil(baseW * dpr).toInt().coerceAtLeast(1)
+        val physH = ceil(baseH * dpr).toInt().coerceAtLeast(1)
 
-    private fun pix(resourcePath: String, width: Int? = null, height: Int? = null): QPixmap
-        = pix(resourcePath, if(width != null && height != null) qs(width, height) else null)
+        val dprKey = String.format("%.3f", dpr)
+        val cacheKey = "$keyOrPath|${baseW}x${baseH}|${physW}x${physH}@$dprKey"
 
-    private fun pix(resourcePath: String, size: QSize? = null): QPixmap {
-        val path = normalize(resourcePath)
-
-        val svgIcon = tryLoadSvg(path, size)
-        if(svgIcon != null) return svgIcon
-
-        val pix = tryLoadPixmap(path, size)
-        if(pix != null) return pix
-
-        val pngPath = path.replace(Regex("\\.svg$", RegexOption.IGNORE_CASE), ".png")
-        val pngPix = tryLoadPixmap(pngPath, size)
-        if(pngPix != null) return pngPix
-
-        mainLogger.warn("Failed to create pixmap from '$path'")
-        return QPixmap()
-    }
-
-    private fun tryLoadSvg(resourcePath: String, size: QSize? = null): QPixmap? {
-        val stream = this::class.java.getResourceAsStream(resourcePath)
-            ?: this::class.java.classLoader.getResourceAsStream(resourcePath.removePrefix("/"))
-            ?: return null
-
-        try {
-            val data = stream.readBytes()
-            val renderer = QSvgRenderer(QByteArray(data))
-
-            val targetSize = size ?: QSize(16, 16)
-            var w = targetSize.width()
-            var h = targetSize.height()
-
-            if(w <= 0 || h <= 0) {
-                val def = renderer.defaultSize()
-                w = if(def.width() > 0)  def.width()  else 16
-                h = if(def.height() > 0) def.height() else 16
-            }
-
-            val vb = renderer.viewBoxF()
-            val vbW = if (vb != null && vb.width() > 0) vb.width() else renderer.defaultSize().width().coerceAtLeast(1).toDouble()
-            val vbH = if (vb != null && vb.height() > 0) vb.height() else renderer.defaultSize().height().coerceAtLeast(1).toDouble()
-
-            val dpr = try { QGuiApplication.primaryScreen()?.devicePixelRatio ?: 1.0 } catch (_: Throwable) { 1.0 }
-            val backingW = (w * dpr).toInt().coerceAtLeast(1)
-            val backingH = (h * dpr).toInt().coerceAtLeast(1)
-
-            val image = QImage(backingW, backingH, QImage.Format.Format_ARGB32_Premultiplied)
-            image.setDevicePixelRatio(dpr)
-            image.fill(Qt.GlobalColor.transparent)
-
-            val painter = QPainter(image)
-
-            try {
-                painter.scale(dpr, dpr)
-
-                val scale = minOf(w.toDouble() / vbW, h.toDouble() / vbH)
-                val renderW = vbW * scale
-                val renderH = vbH * scale
-                val offsetX = (w - renderW) / 2.0
-                val offsetY = (h - renderH) / 2.0
-                val targetRect = QRectF(offsetX, offsetY, renderW, renderH)
-
-                renderer.render(painter, targetRect)
-            } finally { painter.end() }
-
-            val pm = QPixmap.fromImage(image)
-            pm.setDevicePixelRatio(dpr)
-            return pm
-        } catch (e: Exception) {
-            mainLogger.error("Error occurred during SVG rendering for resource: $resourcePath", e)
-            return null
-        } finally {
-            stream.close()
+        return cached.computeIfAbsent(cacheKey) {
+            ThemeMngr.getIcon(keyOrPath, baseW, baseH, dpr)
+                ?: run {
+                    val normalized = if(keyOrPath.startsWith("/")) keyOrPath else "/$keyOrPath"
+                    val url = this::class.java.getResource(normalized) ?: this::class.java.classLoader.getResource(keyOrPath)
+                    if(url != null) {
+                        val pix = QPixmap(url.toString())
+                        if(!pix.isNull) {
+                            val scaled = pix.scaled(qs(physW, physH), Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+                            try { scaled.setDevicePixelRatio(dpr) } catch (_: Throwable) {}
+                            QIcon(scaled)
+                        } else QIcon()
+                    } else QIcon()
+                }
         }
     }
 
-    private fun tryLoadPixmap(resourcePath: String, size: QSize? = null): QPixmap? {
-        val url = this::class.java.getResource(resourcePath) ?: return null
-        val pix = QPixmap(url.toString())
-        if (pix.isNull || pix.isNull) return null
-
-        if (size != null) {
-            val scaled = pix.scaled(size, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
-            return scaled
+    private fun pix(keyOrPath: String, width: Int = 16, height: Int = 16, useDpr: Boolean = true): QPixmap {
+        if(!useDpr) {
+            val icon = ThemeMngr.getIcon(keyOrPath, width, height, 1.0) ?: return QPixmap()
+            return icon.pixmap(width, height)
         }
-        return pix
+
+        val dpr = try {
+            currentDpr(referenceWidget)
+        } catch (_: Throwable) { 1.0 }
+
+        val icon = ThemeMngr.getIcon(keyOrPath, width, height, dpr) ?: return QPixmap()
+
+        return icon.pixmap(width, height)
     }
 
-    private fun normalize(p: String): String = if (p.startsWith("/")) p else "/$p"
+    fun debugIcon(keyOrPath: String, baseW: Int, baseH: Int, widget: QWidget?) {
+        val dpr = try { currentDpr(widget) } catch (_: Throwable) { 1.0 }
+        val physW = ceil(baseW * dpr).toInt().coerceAtLeast(1)
+        val physH = ceil(baseH * dpr).toInt().coerceAtLeast(1)
+        println("DEBUG ICON: key=$keyOrPath dpr=$dpr base=${baseW}x$baseH phys=${physW}x${physH}")
+
+        val ic = ThemeMngr.getIcon(keyOrPath, baseW, baseH, dpr)
+        println("  ThemeMngr.getIcon -> ${if (ic == null) "null" else "icon (isNull=${ic.isNull})"}")
+        ic?.let {
+            val pm = it.pixmap(baseW, baseH)
+            println("  icon.pixmap(logical) -> isNull=${pm.isNull} size=${pm.width()}x${pm.height()} dpr=${try { pm.devicePixelRatio() } catch(_: Throwable) { "?" }}")
+        }
+    }
 
     internal val defaultProjectIcon = javaClass.getResource("/icons/folder.png")!!.path
 }

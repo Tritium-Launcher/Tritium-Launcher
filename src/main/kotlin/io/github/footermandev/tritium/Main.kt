@@ -1,27 +1,28 @@
 package io.github.footermandev.tritium
 
-import com.microsoft.aad.msal4j.SilentParameters
-import io.github.footermandev.tritium.TConstants.TR
-import io.github.footermandev.tritium.auth.MSAL
-import io.github.footermandev.tritium.auth.MicrosoftAuth
-import io.github.footermandev.tritium.auth.ProfileMngr
-import io.github.footermandev.tritium.koin.Koin
-import io.github.footermandev.tritium.service.loadAllServices
+import io.github.footermandev.tritium.accounts.MicrosoftAuth.attemptAutoSignIn
+import io.github.footermandev.tritium.bootstrap.runLowPriorityTasks
+import io.github.footermandev.tritium.bootstrap.startHost
+import io.github.footermandev.tritium.font.loadFont
+import io.github.footermandev.tritium.git.Git
+import io.github.footermandev.tritium.platform.Platform
 import io.github.footermandev.tritium.ui.dashboard.Dashboard
 import io.github.footermandev.tritium.ui.theme.ThemeMngr
+import io.github.footermandev.tritium.ui.theme.TritiumProxyStyle
+import io.qt.core.QCoreApplication
+import io.qt.core.Qt
+import io.qt.gui.QFont
 import io.qt.gui.QIcon
 import io.qt.widgets.QApplication
-import kotlinx.coroutines.DelicateCoroutinesApi
-import kotlinx.coroutines.GlobalScope
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.future.await
-import kotlinx.coroutines.launch
-import org.koin.core.context.startKoin
-import org.koin.logger.slf4jLogger
+import io.qt.widgets.QWidget
+import kotlinx.coroutines.runBlocking
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
+import java.util.prefs.Preferences
 
-val mainLogger: Logger = LoggerFactory.getLogger("$TR::Main")
+// TODO: Needs some cleanup
+
+internal val mainLogger: Logger = LoggerFactory.getLogger(Main::class.java)
 
 @Volatile
 internal var appInstance: QApplication? = null
@@ -29,6 +30,7 @@ internal var appInstance: QApplication? = null
 val TApp: QApplication
     get() = appInstance ?: throw IllegalStateException("QApplication not initialized.")
 
+lateinit var referenceWidget: QWidget
 
 class Main {
     companion object {
@@ -36,64 +38,61 @@ class Main {
         @JvmStatic
         fun main(vararg args: String) {
             mainLogger.info("Starting with args: ${args.joinToString(" ")}")
-
-            manageArguments(args.toList())
-            mainLogger.info(userHome)
-
-            Koin.app = startKoin {
-                slf4jLogger()
-                modules(
-                )
-            }
-
-            attemptAutoSignIn()
-
-            ThemeMngr.init()
-
-            mainLogger.info("Dashboard.NavBg -> ${ThemeMngr.getColorHex("Dashboard.NavBg")}")
+            Platform.printSystemDetails(mainLogger)
 
             if (QApplication.instance() == null) QApplication.initialize(args)
             appInstance = QApplication.instance() as QApplication
+
+            QCoreApplication.setAttribute(Qt.ApplicationAttribute.AA_EnableHighDpiScaling, true)
+            QCoreApplication.setAttribute(Qt.ApplicationAttribute.AA_UseHighDpiPixmaps, true)
+
+
+            referenceWidget = QWidget()
+
+            manageArguments(args.toList())
+
+            ThemeMngr.init()
+
+            Git.init()
+
+            val loaders = startHost(TConstants.EXT_DIR)
+
+            attemptAutoSignIn()
+
+            val baseStyle = QApplication.style()
+            QApplication.setStyle(TritiumProxyStyle(baseStyle))
+            ThemeMngr.setTheme(ThemeMngr.currentThemeId)
+
+            applyStartupFont()
 
             QApplication.setWindowIcon(QIcon(resourceIcon("icons/tritium.png", TConstants.classLoader)!!))
             QApplication.setDesktopFileName("tritium")
             QApplication.setApplicationName("tritium")
 
-            loadAllServices()
-
-
             Dashboard.createAndShow()
 
-            QApplication.exec()
-
-
-        }
-    }
-}
-
-@OptIn(DelicateCoroutinesApi::class)
-private fun attemptAutoSignIn() {
-    GlobalScope.launch {
-        while(true) {
-            try {
-                val accounts = MSAL.app.accounts.await()
-                val account = accounts.iterator().asSequence().firstOrNull()
-                if (account != null) {
-                    val scopes = setOf("XboxLive.signin", "offline_access")
-                    val params = SilentParameters.builder(scopes, account).build()
-                    val result = MSAL.app.acquireTokenSilently(params).await()
-
-                    val mcToken = MicrosoftAuth().getMCToken(result.accessToken())
-                    ProfileMngr.Cache.init(mcToken)
-                } else {
-                    mainLogger.info("No accounts available.")
-                }
-
-                break
-            } catch (e: Exception) {
-                mainLogger.error("Sign-in failed, will retry in 60s: ${e.message}", e)
-                delay(60_000)
+            runBlocking {
+                runLowPriorityTasks()
             }
+
+            QApplication.exec()
+        }
+
+        private fun applyStartupFont() {
+            val prefs = Preferences.userRoot().node("/tritium")
+            val defaultLoaded = loadFont("/fonts/Inter/InterVariable.ttf")?.let { QFont(it, 10) }
+
+            val savedFamily = prefs.get("globalFontFamily", null)
+            val savedSize = prefs.getInt("globalFontSize", -1)
+            val useSaved = !savedFamily.isNullOrBlank() && savedSize > 0
+
+            val fontToSet = when {
+                useSaved -> QFont(savedFamily, savedSize)
+                defaultLoaded != null -> defaultLoaded
+                else -> null
+            }
+
+            fontToSet?.let { QApplication.setFont(it) }
         }
     }
 }

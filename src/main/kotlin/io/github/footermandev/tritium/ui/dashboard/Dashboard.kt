@@ -1,21 +1,22 @@
 package io.github.footermandev.tritium.ui.dashboard
 
 import io.github.footermandev.tritium.*
-import io.github.footermandev.tritium.ui.theme.ColorPart
 import io.github.footermandev.tritium.ui.theme.TColors
 import io.github.footermandev.tritium.ui.theme.TIcons
-import io.github.footermandev.tritium.ui.theme.applyThemeStyle
+import io.github.footermandev.tritium.ui.theme.qt.setThemedStyle
+import io.github.footermandev.tritium.ui.widgets.constructor_functions.hBoxLayout
+import io.github.footermandev.tritium.ui.widgets.constructor_functions.qWidget
+import io.github.footermandev.tritium.ui.widgets.constructor_functions.vBoxLayout
 import io.qt.core.Qt
 import io.qt.gui.QIcon
 import io.qt.widgets.*
 import java.awt.Color
 
-val bgDashboardLogger = logger("Dashboard::Background")
-val dashboardLogger   = logger("Dashboard")
-
-class Dashboard : QMainWindow() {
-
-    private val logger = logger()
+/**
+ * The main window for viewing Projects, Accounts, Themes and Settings.
+ */
+class Dashboard internal constructor() : QMainWindow() {
+    private object DashboardBackground
 
     companion object {
         var I: Dashboard? = null
@@ -26,46 +27,52 @@ class Dashboard : QMainWindow() {
             win.show()
             I = win
         }
+
+        internal val logger = logger()
+        internal val bgDashboardLogger = logger(DashboardBackground::class)
     }
 
-    private val stackedWidget = QStackedWidget()
+    private val stackedWidget = QStackedWidget().apply {
+        objectName = "dashboardStack"
+        frameShape = QFrame.Shape.NoFrame
+        lineWidth = 0
+    }
     private var selectedButton: QPushButton? = null
 
     init {
         windowTitle = "Tritium - Dashboard"
-        minimumSize = qs(650, 390)
-        maximumSize = qs(650, 390)
+        minimumSize = qs(650, 400)
+        maximumSize = qs(650, 400)
         isWindowModified = false
-        windowIcon = QIcon(resourceIcon("icons/tritium.png", javaClass.classLoader)!!)
+        windowIcon = QIcon(TIcons.Tritium)
 
-        try {
-            windowIcon = QIcon(TIcons.Tritium)
-        } catch (t: Throwable) {
-            logger.debug("Could not set window icon: ${t.message}")
+        val central = qWidget {
+            objectName = "dashboard"
         }
 
-        val central = QWidget()
-        central.applyThemeStyle("Dashboard.NavBg", ColorPart.Bg)
+        val mainLayout = hBoxLayout(central).apply {
+            setSpacing(0)
+            setContentsMargins(0, 0, 0, 0)
+        }
 
-        val mainLayout = QHBoxLayout(central)
-        mainLayout.widgetSpacing = 0
-        mainLayout.contentsMargins = 0.m
+        val leftWidget = qWidget {
+            objectName = "dashboardNav"
+            setContentsMargins(0, 0, 0, 0)
+        }
 
-        val leftWidget = QWidget()
-        leftWidget.applyThemeStyle("Dashboard.NavBg", ColorPart.Bg)
+        stackedWidget.setContentsMargins(0, 0, 0, 0)
 
-        val leftLayout = QVBoxLayout(leftWidget)
+        val leftLayout = vBoxLayout(leftWidget)
         leftLayout.contentsMargins = 10.m
         leftLayout.widgetSpacing = 0
 
-
         val projectsBtn = createNavBtn("Projects")
-        val accountBtn = createNavBtn("Account")
+        val accountBtn  = createNavBtn("Accounts")
+        val themesBtn   = createNavBtn("Themes")
         val settingsBtn = createNavBtn("Settings")
-        val themesBtn = createNavBtn("Themes")
 
         selectedButton = projectsBtn
-        updateBtnAppearance(projectsBtn, true)
+        projectsBtn.isChecked = true
 
         projectsBtn.onClicked {
             updateSelectedBtn(projectsBtn)
@@ -77,94 +84,90 @@ class Dashboard : QMainWindow() {
             stackedWidget.currentIndex = 1
         }
 
-        settingsBtn.onClicked {
-            updateSelectedBtn(settingsBtn)
+        themesBtn.onClicked {
+            updateSelectedBtn(themesBtn)
             stackedWidget.currentIndex = 2
         }
 
-        themesBtn.onClicked {
-            updateSelectedBtn(themesBtn)
+        settingsBtn.onClicked {
+            updateSelectedBtn(settingsBtn)
             stackedWidget.currentIndex = 3
         }
 
-        leftLayout.add(projectsBtn, accountBtn, settingsBtn, themesBtn)
+        leftLayout.add(projectsBtn, accountBtn, themesBtn, settingsBtn)
         leftLayout.addStretch(1)
 
-        val bottomWidget = QWidget()
-        val bottomLayout = QVBoxLayout(bottomWidget)
+        val bottomWidget = qWidget()
+        val bottomLayout = vBoxLayout(bottomWidget)
         bottomLayout.widgetSpacing = 10
         bottomLayout.contentsMargins = 0.m
 
         leftLayout.add(bottomWidget)
 
-        stackedWidget.addWidget(NewProjectsPanel())
-        stackedWidget.addWidget(AccountPanel())
-        stackedWidget.addWidget(SettingsPanelQt())
-        stackedWidget.addWidget(ThemesPanel())
+        setupNavPanels()
 
-        stackedWidget.frameShape = QFrame.Shape.NoFrame
-        stackedWidget.lineWidth = 0
-        stackedWidget.applyThemeStyle("Dashboard.ProjectsBg", ColorPart.Bg)
+        val divider = QFrame().apply {
+            objectName = "dashboardDivider"
+            frameShape = QFrame.Shape.NoFrame
+            frameShadow = QFrame.Shadow.Plain
+            lineWidth = 0
+            setAttribute(Qt.WidgetAttribute.WA_StyledBackground, true)
+            setFixedWidth(1)
+            sizePolicy = QSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Expanding)
+        }
 
         mainLayout.addWidget(leftWidget, 0)
+        mainLayout.addWidget(divider, 0)
         mainLayout.addWidget(stackedWidget, 1)
 
+
         setCentralWidget(central)
+
+        central.setThemedStyle {
+            selector("#dashboard") {
+                backgroundColor(TColors.Surface0)
+            }
+
+            selector("#dashboardNav") {
+                backgroundColor(TColors.Surface1)
+            }
+
+            selector("#dashboardDivider") {
+                backgroundColor(TColors.Surface2)
+            }
+
+            selector("#navBtn") {
+                borderRadius(4)
+                border()
+                textAlign("bottom")
+                padding(top = 6, bottom = 6)
+                background("transparent")
+            }
+            selector("#navBtn:focus") {
+                outlineColor("none")
+            }
+            selector("QPushButton#navBtn:checked") {
+                backgroundColor(TColors.Highlight)
+            }
+        }
     }
 
     private fun createNavBtn(label: String): QPushButton {
-        val btn = QPushButton(label)
-        btn.isEnabled = true
-        btn.focusPolicy = Qt.FocusPolicy.StrongFocus
-        QSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-
-        // language=qss
-        btn.styleSheet = """
-            QPushButton {
-                border-radius: 4px;
-                border: none;
-                text-align: left;
-                padding: 6px 12px;
-                color: white;
-                background: transparent;
-            }
-            QPushButton:focus { outline: none; }
-        """.trimIndent()
+        val btn = QPushButton(label).apply {
+            isCheckable = true
+            objectName = "navBtn"
+            isEnabled = true
+            focusPolicy = Qt.FocusPolicy.StrongFocus
+            sizePolicy = QSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
+            minimumHeight = 20
+        }
         return btn
     }
 
     private fun updateSelectedBtn(newBtn: QPushButton) {
-        selectedButton?.let { updateBtnAppearance(it, false) }
-        updateBtnAppearance(newBtn, true)
+        selectedButton?.isChecked = false
+        newBtn.isChecked = true
         selectedButton = newBtn
-    }
-
-    private fun updateBtnAppearance(btn: QPushButton, isSelected: Boolean) {
-        if(isSelected) {
-            //language=qss
-            btn.styleSheet = """
-                QPushButton {
-                    border-radius: 4px;
-                    border: none;
-                    text-align: left;
-                    padding: 6px 12px;
-                    color: white;
-                    background: ${TColors.Accent};
-                }
-            """.trimIndent()
-        } else {
-            //language=qss
-            btn.styleSheet = """
-                QPushButton {
-                    border-radius: 4px;
-                    border: none;
-                    text-align: left;
-                    padding: 6px 12px;
-                    color: white;
-                    background: transparent;
-                }
-            """.trimIndent()
-        }
     }
 
     private fun qColorToCss(color: Color): String {
@@ -173,13 +176,22 @@ class Dashboard : QMainWindow() {
         val b = color.blue
         return "rgb($r,$g,$b)"
     }
-}
 
-class SettingsPanelQt : QWidget() {
-    init {
-        val layout = QVBoxLayout(this)
-        val label = QPushButton("Settings - port your SettingsPanel UI here")
-        label.isEnabled = false
-        layout.addWidget(label)
+    private fun setupNavPanels() {
+        // Projects
+        val projectsPanel = ProjectsPanel()
+        stackedWidget.addWidget(projectsPanel)
+
+        // Accounts
+        val accountsPanel = AccountsPanel()
+        stackedWidget.addWidget(accountsPanel)
+
+        // Themes
+        val themesPanel = ThemesPanel()
+        stackedWidget.addWidget(themesPanel)
+
+        // TODO: Settings
+
+
     }
 }

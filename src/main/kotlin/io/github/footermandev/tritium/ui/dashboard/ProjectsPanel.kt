@@ -4,741 +4,513 @@ import io.github.footermandev.tritium.*
 import io.github.footermandev.tritium.core.project.ProjectBase
 import io.github.footermandev.tritium.core.project.ProjectDirWatcher
 import io.github.footermandev.tritium.core.project.ProjectMngr
-import io.github.footermandev.tritium.ui.components.SearchIconButton
-import io.github.footermandev.tritium.ui.theme.ColorPart
+import io.github.footermandev.tritium.core.project.ProjectMngrListener
+import io.github.footermandev.tritium.extension.core.BuiltinRegistries
+import io.github.footermandev.tritium.io.VPath
+import io.github.footermandev.tritium.registry.DeferredRegistryBuilder
+import io.github.footermandev.tritium.ui.dashboard.Dashboard.Companion.bgDashboardLogger
+import io.github.footermandev.tritium.ui.theme.TColors
 import io.github.footermandev.tritium.ui.theme.TIcons
-import io.github.footermandev.tritium.ui.theme.ThemeMngr
-import io.github.footermandev.tritium.ui.theme.applyThemeStyle
-import io.github.footermandev.tritium.ui.theme.qt.qtStyle
-import io.qt.Nullable
-import io.qt.core.*
-import io.qt.gui.*
+import io.github.footermandev.tritium.ui.theme.qt.setThemedStyle
+import io.github.footermandev.tritium.ui.widgets.TPushButton
+import io.github.footermandev.tritium.ui.widgets.constructor_functions.hBoxLayout
+import io.github.footermandev.tritium.ui.widgets.constructor_functions.label
+import io.github.footermandev.tritium.ui.widgets.constructor_functions.toolButton
+import io.github.footermandev.tritium.ui.widgets.constructor_functions.vBoxLayout
+import io.github.footermandev.tritium.ui.wizard.NewProjectDialog
+import io.qt.core.QMargins
+import io.qt.core.QTimer
+import io.qt.core.Qt
+import io.qt.gui.QHideEvent
+import io.qt.gui.QIcon
+import io.qt.gui.QKeyEvent
+import io.qt.gui.QShowEvent
 import io.qt.widgets.*
 import kotlinx.coroutines.DelicateCoroutinesApi
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.GlobalScope
 import kotlinx.coroutines.launch
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
+import io.github.footermandev.tritium.ui.widgets.constructor_functions.widget as qWidget
 
-class NewProjectsPanel: QWidget() {
-    private val logger = logger()
+/** Persists view preferences for the projects panel. */
+class ProjectsPanelPrefs(private val file: VPath) {
+    @Serializable
+    private data class Payload(val styleId: String? = null, val sortByStyle: Map<String, String> = emptyMap())
 
-    private val scrollArea = QScrollArea()
-    private val listContainer = QWidget()
-    private val listLayout = QVBoxLayout(listContainer)
+    private val json = Json { prettyPrint = true }
+    private var styleId: String? = null
+    private val sortByStyle = mutableMapOf<String, String>()
+
+    init { load() }
+
+    fun styleId(): String? = styleId
+    fun sortFor(style: String): String? = sortByStyle[style]
+
+    fun saveStyle(id: String?) {
+        styleId = id
+        persist()
+    }
+
+    fun saveSort(style: String, sortId: String) {
+        sortByStyle[style] = sortId
+        persist()
+    }
+
+    private fun load() {
+        try {
+            if (!file.exists()) return
+            val text = file.readTextOrNull() ?: return
+            val payload = json.decodeFromString<Payload>(text)
+            styleId = payload.styleId
+            sortByStyle.clear()
+            sortByStyle.putAll(payload.sortByStyle)
+        } catch (_: Throwable) {}
+    }
+
+    private fun persist() {
+        try {
+            val payload = Payload(styleId, sortByStyle.toMap())
+            file.parent().mkdirs()
+            file.writeBytes(json.encodeToString(payload).toByteArray())
+        } catch (_: Throwable) {}
+    }
+}
+
+/** Dashboard project list panel with pluggable styles. */
+class ProjectsPanel internal constructor(): QWidget(), ProjectMngrListener {
     private val watcher: ProjectDirWatcher
     private var currentProjects: List<ProjectBase> = emptyList()
     private var searchFilter: String = ""
 
-    private enum class LayoutMode { List, Grid, CompactList }
+    private val styleButtons = QButtonGroup(this)
+    private val styleButtonRow = QHBoxLayout()
+    private val sortCombo = QComboBox()
+    private val styleStackHost = qWidget()
+    private val styleStack = QStackedLayout().also { styleStackHost.setLayout(it) }
+    private var styleControls: QWidget
 
-    private interface ProjectLayout {
-        val widget: QWidget
-        fun setProjects(projects: List<ProjectBase>)
-        fun applyFilter(filter: String)
-        fun clear()
-    }
+    private val layoutStore = LayoutStore(VPath.get("project_layouts/positions.json").toAbsolute())
+    private val groupStore = GroupStore(VPath.get("project_layouts/groups.json").toAbsolute())
+    private val prefsStore = ProjectsPanelPrefs(VPath.get("project_layouts/preferences.json").toAbsolute())
 
-    private val searchDebounceTimer = QTimer().apply {
-        isSingleShot = true
-        interval = 20
-    }
-    private var noResultsLabel: QLabel? = null
+    private val styleInstances = mutableMapOf<String, ProjectListStyle>()
+    private val styleButtonById = mutableMapOf<String, QAbstractButton>()
+    private var activeStyleId: String? = null
 
-    private val layouts: Map<LayoutMode, ProjectLayout> by lazy {
-        mapOf(
-            LayoutMode.List to ListProjectLayout(),
-            LayoutMode.Grid to GridProjectLayout(),
-            LayoutMode.CompactList to CompactProjectLayout()
-        )
-    }
-    private var activeMode: LayoutMode = LayoutMode.List
-    private var currentLayout: ProjectLayout = layouts[activeMode]!!
+    private val searchDebounceTimer = QTimer().apply { isSingleShot = true; interval = 20 }
+    private val refreshTimer = QTimer().apply { isSingleShot = true; interval = 750 }
+    private var refreshPending = false
+    private var refreshInFlight = false
+    private var lastRefreshMs = 0L
+    private var dvdHotkeyBuffer = ""
+
+    private val styleRegistry = BuiltinRegistries.ProjectListStyle
+    private var styleRegistryBuilder: DeferredRegistryBuilder<ProjectListStyleProvider>? = null
 
     init {
-        val mainLayout = QVBoxLayout(this)
-        mainLayout.contentsMargins = 10.m
-        mainLayout.widgetSpacing = 0
+        objectName = "projectsPanel"
+        focusPolicy = Qt.FocusPolicy.StrongFocus
 
-        val btnRow = QWidget()
-        val btnLayout = QHBoxLayout(btnRow)
-        btnRow.sizePolicy = QSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-        btnLayout.contentsMargins = 0.m
-        btnLayout.widgetSpacing = 10
+        val mainLayout = vBoxLayout(this) {
+            contentsMargins = QMargins(0, 10, 0, 10)
+            widgetSpacing = 8
+        }
+
+        mainLayout.addLayout(buildHeaderControls())
+        styleControls = buildStyleControls()
+        mainLayout.addWidget(styleControls)
+        mainLayout.addWidget(styleStackHost, 1)
+
+        searchDebounceTimer.timeout.connect { applyFilter() }
+        refreshTimer.timeout.connect {
+            if (refreshInFlight) refreshPending = true else refresh()
+        }
+
+        watcher = ProjectDirWatcher(ProjectMngr.projectsDir)
+        watcher.start(onChange = { scheduleRefresh() })
+        ProjectMngr.addListener(this)
+        scheduleRefresh()
+
+        setThemedStyle {
+            selector("#projectsPanel") { backgroundColor(TColors.Surface0) }
+        }
+
+        setupStyleRegistry()
+    }
+
+    /** Stops watching and releases style resources. */
+    fun exit() {
+        watcher.stop()
+        ProjectMngr.removeListener(this)
+        styleInstances.values.forEach { it.dispose() }
+    }
+
+    /** Hides style controls each time the panel is shown. */
+    override fun showEvent(event: QShowEvent?) {
+        super.showEvent(event)
+        styleControls.isVisible = false
+    }
+
+    /** Hides style controls when the panel is hidden. */
+    override fun hideEvent(event: QHideEvent?) {
+        super.hideEvent(event)
+        styleControls.isVisible = false
+    }
+
+    /** Toggles style controls when Alt is pressed. */
+    override fun keyPressEvent(event: QKeyEvent?) {
+        val keyEvent = event ?: return super.keyPressEvent(event)
+        handleDvdHotkey(keyEvent)
+        if (keyEvent.key() == Qt.Key.Key_Alt.value()) {
+            if (!keyEvent.isAutoRepeat) {
+                styleControls.isVisible = !styleControls.isVisible
+            }
+            return
+        }
+        super.keyPressEvent(keyEvent)
+    }
+
+    /** Tracks the "dvd" key sequence to activate the style. */
+    private fun handleDvdHotkey(event: QKeyEvent) {
+        if (event.modifiers().testFlag(Qt.KeyboardModifier.ControlModifier) ||
+            event.modifiers().testFlag(Qt.KeyboardModifier.MetaModifier) ||
+            event.modifiers().testFlag(Qt.KeyboardModifier.AltModifier)) {
+            if (event.key() != Qt.Key.Key_Alt.value()) dvdHotkeyBuffer = ""
+            return
+        }
+        val text = event.text().lowercase()
+        if (text.length != 1) { dvdHotkeyBuffer = ""; return }
+        val keyChar = text[0]
+        if (keyChar != 'd' && keyChar != 'v') { dvdHotkeyBuffer = ""; return }
+        dvdHotkeyBuffer = (dvdHotkeyBuffer + keyChar).takeLast(3)
+        if (dvdHotkeyBuffer == "dvd") activateDvdStyle()
+    }
+
+    /** Handles project creation events. */
+    override fun onProjectCreated(project: ProjectBase) { scheduleRefresh() }
+
+    /** Handles project deletion events. */
+    override fun onProjectDeleted(project: ProjectBase) { scheduleRefresh() }
+
+    /** Handles project updates. */
+    override fun onProjectUpdated(project: ProjectBase) { scheduleRefresh() }
+
+    /** Handles project load completion events. */
+    override fun onProjectsFinishedLoading(projects: List<ProjectBase>) {}
+
+    /** Handles project generation failures. */
+    override fun onProjectFailedToGenerate(project: ProjectBase, errorMsg: String, exception: Exception?) {}
+
+    /** Handles project opened events. */
+    override fun onProjectOpened(project: ProjectBase) {}
+
+    /** Schedules a refresh respecting debounce. */
+    private fun scheduleRefresh() {
+        if (ProjectMngr.generationActive) return
+        val now = System.currentTimeMillis()
+        if (refreshInFlight) { refreshPending = true; return }
+        if (refreshTimer.isActive) return
+        val elapsed = now - lastRefreshMs
+        if (elapsed < 750) { refreshTimer.start(); return }
+        refreshTimer.start(0)
+    }
+
+    /** Refreshes projects from disk and applies to the active style. */
+    @OptIn(DelicateCoroutinesApi::class)
+    private fun refresh() {
+        lastRefreshMs = System.currentTimeMillis()
+        refreshInFlight = true
+        GlobalScope.launch(Dispatchers.IO) {
+            bgDashboardLogger.info("Refreshing projects...")
+            val projects = ProjectMngr.refreshProjects(ProjectMngr.RefreshSource.DASHBOARD)
+            QTimer.singleShot(0) {
+                currentProjects = projects
+                refreshInFlight = false
+                applyFilter(immediate = true)
+                if (refreshPending) { refreshPending = false; scheduleRefresh() }
+            }
+        }
+    }
+
+    /** Applies search filter and pushes projects to the active style. */
+    private fun applyFilter(immediate: Boolean = false) {
+        val filtered = filteredProjects()
+        val style = activeStyleId?.let { styleInstances[it] }
+        val sort = currentSortOption()
+        if (style != null && sort != null) {
+            style.applyProjects(filtered, sort)
+        }
+        if (!immediate) searchDebounceTimer.stop()
+    }
+
+    /** Opens a project and closes the dashboard. */
+    private fun openProject(project: ProjectBase) {
+        try { ProjectMngr.openProject(project) } catch (t: Throwable) { Dashboard.logger.error("Failed to open project: ${t.message}", t) }
+        Dashboard.I?.let { try { it.close() } catch (_: Throwable) {} }
+    }
+
+    /** Builds the top toolbar; keeps existing buttons intact. */
+    private fun buildHeaderControls(): QLayout {
+        val layout = hBoxLayout { contentsMargins = QMargins(8, 0, 8, 0); widgetSpacing = 10 }
 
         val searchField = QLineEdit().apply {
             objectName = "searchField"
             placeholderText = "Search"
+            maximumHeight = 40
             minimumHeight = 40
             sizePolicy = QSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-
-            val icon = SearchIconButton(
-                this,
-                TIcons.Search.scaled(32, 32),
-                TIcons.CloseSearch.scaled(32, 32),
-                this
-            )
-            icon.placeAt(8, 4)
-
-            styleSheet = qtStyle {
+            isVisible = false
+            setThemedStyle {
                 selector("searchField") {
                     padding(left = 40)
                     border()
                     borderRadius(8)
-                    backgroundColor(ThemeMngr.getColorHex("ButtonBg")!!)
+                    backgroundColor(TColors.Button)
                 }
-            }.toCss()
-
-            textChanged.connect(this@NewProjectsPanel, "onSearchTextChanged(String)")
-
-            textChanged.connect { newText: String ->
-                if(newText.isNotEmpty()) {
-                    icon.activateOnce()
-                } else {
-                    icon.deactivateOnce()
-                }
-                icon.updateCursor()
             }
-
-            icon.updateCursor()
+            textChanged.connect {
+                searchFilter = text.lowercase()
+                searchDebounceTimer.start()
+            }
         }
 
-        val newProject = QPushButton("New Project").apply {
+        val searchToggle = TPushButton {
+            objectName = "searchToggleBtn"
+            isCheckable = true
+            maximumHeight = 40
             minimumHeight = 40
+            sizePolicy = QSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+            icon = QIcon(TIcons.Search)
+            iconSize = qs(24, 24)
+        }
+
+        val newProject = TPushButton {
+            text = "New Project"
+            objectName = "newProjectBtn"
+            maximumHeight = 40
             sizePolicy = QSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-            applyThemeStyle("ButtonBg", ColorPart.Bg)
             icon = QIcon(TIcons.NewProject)
             iconSize = qs(32, 32)
-            onClicked {
-                dashboardLogger.info("New Project")
-            }
+            onClicked { NewProjectDialog(activeWindow).isVisible = true }
         }
 
-        val importProject = QPushButton("Import Project").apply {
-            minimumHeight = 40
+        val importProject = TPushButton {
+            text = "Import Project"
+            objectName = "importProjectBtn"
+            maximumHeight = 40
             sizePolicy = QSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-            applyThemeStyle("ButtonBg", ColorPart.Bg)
             icon = QIcon(TIcons.Import)
             iconSize = qs(32, 32)
-            isEnabled = true // MARK: Not yet implemented
         }
 
-        val cloneFromGit = QPushButton("Clone from Git").apply {
-            minimumHeight = 40
+        val cloneFromGit = TPushButton {
+            text = "Clone from Git"
+            objectName = "cloneFromGitBtn"
+            maximumHeight = 40
             sizePolicy = QSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
-            applyThemeStyle("ButtonBg", ColorPart.Bg)
             icon = QIcon(TIcons.Git)
             iconSize = qs(32, 32)
-            isEnabled = true // MARK: Not yet implemented
         }
 
-        val listBtn = QToolButton().apply {
-            text = ""
-            toolTip = "List"
-            checkable = true
-            icon = QIcon(TIcons.ListView)
-            clicked.connect { switchLayout(LayoutMode.List) }
-        }
-        val gridBtn = QToolButton().apply {
-            text = ""
-            toolTip = "Grid"
-            checkable = true
-            icon = QIcon(TIcons.GridView)
-            clicked.connect { switchLayout(LayoutMode.Grid) }
-        }
-        val compactBtn = QToolButton().apply {
-            text = ""
-            toolTip = "Compact"
-            checkable = true
-            icon = QIcon(TIcons.CompactView)
-            clicked.connect { switchLayout(LayoutMode.CompactList) }
-        }
+        /** Updates the toolbar to show the search field. */
+        fun setSearchExpanded(expanded: Boolean, clearText: Boolean = false) {
+            searchField.isVisible = expanded
+            newProject.isVisible = !expanded
+            importProject.isVisible = !expanded
+            cloneFromGit.isVisible = !expanded
 
-        listBtn.isChecked = true
-
-        val layoutButtonsWidget = QWidget().apply {
-            val v = QVBoxLayout(this)
-            v.contentsMargins = 0.m
-            v.widgetSpacing = 6
-            v.addWidget(listBtn)
-            v.addWidget(gridBtn)
-            v.addWidget(compactBtn)
-
-            sizePolicy = QSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
-            minimumWidth = 12
-            maximumWidth = 12
-            maximumHeight = 36
-            setFixedWidth(12)
-        }
-
-        btnLayout.addWidget(searchField)
-        btnLayout.addWidget(newProject)
-        btnLayout.addWidget(importProject)
-        btnLayout.addWidget(cloneFromGit)
-        btnLayout.addWidget(layoutButtonsWidget)
-        btnLayout.setStretch(0,1)
-        btnLayout.setStretch(1,1)
-        btnLayout.setStretch(2,1)
-        btnLayout.setStretch(3, 1)
-        mainLayout.addWidget(btnRow)
-
-        scrollArea.widgetResizable = true
-        scrollArea.verticalScrollBarPolicy = Qt.ScrollBarPolicy.ScrollBarAlwaysOff
-        scrollArea.frameShape = QFrame.Shape.NoFrame
-        scrollArea.setWidget(currentLayout.widget)
-        mainLayout.addWidget(scrollArea, 1)
-
-        listLayout.setAlignment(Qt.AlignmentFlag.AlignTop)
-        listLayout.contentsMargins = 20.m
-        listLayout.widgetSpacing = 10
-
-        searchDebounceTimer.timeout.connect(this, "applyFilter()")
-
-        watcher = ProjectDirWatcher(ProjectMngr.projectsDir.toPath())
-        watcher.start(onChange = {
-            QTimer.singleShot(0) { refresh() }
-        })
-
-        refresh()
-    }
-
-    private fun switchLayout(mode: LayoutMode) {
-        if (mode == activeMode) return
-
-        val vbar = scrollArea.verticalScrollBar()
-        val prevScroll = vbar?.value() ?: 0
-
-        // swap widget
-        activeMode = mode
-        currentLayout = layouts[mode]!!
-        scrollArea.takeWidget()?.let {
-            it.hide()
-            it.setParent(null)
-            it.disposeLater()
-        }
-        scrollArea.setWidget(currentLayout.widget)
-
-        currentLayout.setProjects(getFilteredProjects())
-        currentLayout.applyFilter(searchFilter)
-
-        QTimer.singleShot(0) { vbar?.value = prevScroll }
-    }
-
-    fun exit() { watcher.stop() }
-
-    @OptIn(DelicateCoroutinesApi::class)
-    private fun refresh() {
-        GlobalScope.launch(Dispatchers.IO) {
-            bgDashboardLogger.info("Refreshing projects...")
-            val projects = ProjectMngr.refreshProjects()
-            QTimer.singleShot(0) {
-                if(!projectsEqual(currentProjects, projects)) {
-                    currentProjects = projects
-                    currentLayout.setProjects(getFilteredProjects())
-                } else bgDashboardLogger.debug("Project list unchanged, skipping UI update")
+            if (expanded) {
+                layout.setStretch(0, 0); layout.setStretch(1, 1); layout.setStretch(2, 0); layout.setStretch(3, 0); layout.setStretch(4, 0)
+                searchField.setFocus()
+            } else {
+                layout.setStretch(0, 0); layout.setStretch(1, 0); layout.setStretch(2, 2); layout.setStretch(3, 2); layout.setStretch(4, 2)
+                if (clearText) searchField.clear()
             }
         }
-    }
 
-    private fun getFilteredProjects(): List<ProjectBase> = if(searchFilter.isBlank()) {
-        currentProjects
-    } else {
-        currentProjects.filter { project ->
-            project.name.lowercase().contains(searchFilter)
+        searchToggle.toggled.connect { checked ->
+            searchToggle.isDown = checked
+            setSearchExpanded(checked, clearText = !checked)
+            if (!checked) { searchFilter = ""; searchDebounceTimer.start() }
         }
+
+        layout.addWidget(searchToggle)
+        layout.addWidget(searchField)
+        layout.addWidget(newProject)
+        layout.addWidget(importProject)
+        layout.addWidget(cloneFromGit)
+        layout.setStretch(0, 0)
+        layout.setStretch(1, 0)
+        layout.setStretch(2, 2)
+        layout.setStretch(3, 2)
+        layout.setStretch(4, 2)
+        return layout
     }
 
-    private fun projectsEqual(a: List<ProjectBase>, b: List<ProjectBase>): Boolean {
-        if (a.size != b.size) return false
-        return a.zip(b).all { (p1, p2) ->
-            p1.path == p2.path && p1.name == p2.name && p1.icon == p2.icon
+    /** Builds view selection and sort controls. */
+    private fun buildStyleControls(): QWidget {
+        val container = qWidget { isVisible = false }
+        val layout = hBoxLayout(container) { contentsMargins = 0.m; widgetSpacing = 8 }
+
+        styleButtonRow.widgetSpacing = 6
+        styleButtons.exclusive = true
+        layout.addWidget(label("View:"))
+        layout.addLayout(styleButtonRow)
+        layout.addStretch(1)
+
+        val sortRow = hBoxLayout { widgetSpacing = 6 }
+        sortRow.addWidget(label("Sort:"))
+        sortCombo.minimumWidth = 200
+        sortCombo.currentIndexChanged.connect { idx ->
+            if (idx < 0) return@connect
+            val sort = currentSortOption() ?: return@connect
+            activeStyleId?.let { prefsStore.saveSort(it, sort.id) }
+            styleInstances[activeStyleId]?.applyProjects(filteredProjects(), sort)
         }
+        sortRow.addWidget(sortCombo)
+        layout.addLayout(sortRow)
+
+        return container
     }
 
-    private fun clearLayout(layout: QLayout) {
-        for(i in layout.count() - 1 downTo 0) {
-            val item = layout.takeAt(i) ?: continue
-            item.widget()?.let { w ->
-                layout.removeWidget(w)
-                w.hide()
-                w.setParent(null)
-                w.disposeLater()
+    /** Builds styles from the registered providers. */
+    private fun buildStyleButtons(providers: List<ProjectListStyleProvider>) {
+        if (styleInstances.isNotEmpty()) return
+
+        val preferredStyle = prefsStore.styleId()
+        var firstVisibleId: String? = null
+        var firstStyleId: String? = null
+
+        providers.sortedBy { it.id }.forEach { provider ->
+            val id = provider.id
+            val ctx = ProjectStyleContext(
+                this,
+                this::openProject,
+                layoutStore,
+                groupStore,
+                this::requestRefresh
+            ) { styleControls.isVisible }
+
+            val style = provider.create(ctx)
+            styleInstances[id] = style
+
+            if (firstStyleId == null) firstStyleId = id
+            if (!provider.hidden && firstVisibleId == null) firstVisibleId = id
+
+            if (!provider.hidden) {
+                val btn = toolButton().apply {
+                    isCheckable = true
+                    text = provider.title
+                    icon = provider.icon ?: QIcon()
+                    toolButtonStyle = Qt.ToolButtonStyle.ToolButtonTextUnderIcon
+                    clicked.connect { switchStyle(id) }
+                }
+                styleButtonById[id] = btn
+                styleButtons.addButton(btn)
+                styleButtonRow.addWidget(btn)
+            }
+
+            val widget = style.widget()
+            styleStack.addWidget(widget)
+            val idx = styleStack.indexOf(widget)
+            if (activeStyleId == null && preferredStyle == id) {
+                activeStyleId = id
+                styleButtonById[id]?.isChecked = true
+                if (idx >= 0) styleStack.currentIndex = idx
             }
         }
+
+        if (activeStyleId == null) {
+            val target = preferredStyle?.takeIf { styleInstances.containsKey(it) }
+                ?: firstVisibleId
+                ?: firstStyleId
+            target?.let { id ->
+                activeStyleId = id
+                styleButtonById[id]?.isChecked = true
+                styleInstances[id]?.widget()?.let { widget ->
+                    val idx = styleStack.indexOf(widget)
+                    if (idx >= 0) styleStack.currentIndex = idx
+                }
+            }
+        }
+
+        refreshSortOptions()
     }
 
-    private fun applyFilter() {
-        currentLayout.applyFilter(searchFilter)
-        val vbar = scrollArea.verticalScrollBar()
-        val prev = vbar?.value() ?: 0
-        QTimer.singleShot(0) { vbar?.value = prev }
+    /** Initializes the style registry listener. */
+    private fun setupStyleRegistry() {
+        if (styleRegistryBuilder != null) return
+        styleRegistryBuilder = DeferredRegistryBuilder(styleRegistry) { providers ->
+            buildStyleButtons(providers)
+        }
     }
 
+    /** Switches the active style and reapplies sorting. */
+    private fun switchStyle(id: String) {
+        if (activeStyleId == id) return
+        val style = styleInstances[id] ?: return
+        activeStyleId = id
+        val widget = style.widget()
+        val idx = styleStack.indexOf(widget)
+        if (idx >= 0) styleStack.currentIndex = idx
+        refreshSortOptions()
+        val sort = currentSortOption()
+        prefsStore.saveStyle(id)
+        if (sort != null) {
+            style.applyProjects(filteredProjects(), sort)
+            prefsStore.saveSort(id, sort.id)
+        }
+    }
+
+    /** Switches to the DVD bounce style when the secret hotkey is pressed. */
+    private fun activateDvdStyle() {
+        val targetId = "dvd"
+        if (activeStyleId == targetId) {
+            val sort = currentSortOption() ?: styleInstances[targetId]?.sortOptions?.firstOrNull()
+            if (sort != null) styleInstances[targetId]?.applyProjects(filteredProjects(), sort)
+            return
+        }
+        if (!styleInstances.containsKey(targetId)) return
+        styleButtonById[targetId]?.isChecked = true
+        switchStyle(targetId)
+    }
+
+    /** Refreshes the sort combo for the current style. */
+    private fun refreshSortOptions() {
+        val style = activeStyleId?.let { styleInstances[it] } ?: return
+        val savedSort = activeStyleId?.let { prefsStore.sortFor(it) }
+        sortCombo.blockSignals(true)
+        sortCombo.clear()
+        style.sortOptions.forEach { opt -> sortCombo.addItem(opt.label, opt.id) }
+        val targetId = savedSort?.takeIf { id -> style.sortOptions.any { it.id == id } }
+            ?: style.sortOptions.firstOrNull()?.id
+        val idx = style.sortOptions.indexOfFirst { it.id == targetId }.coerceAtLeast(0)
+        if (idx in 0 until sortCombo.count) sortCombo.currentIndex = idx
+        sortCombo.blockSignals(false)
+    }
+
+    /** Returns projects filtered by the search query. */
+    private fun filteredProjects(): List<ProjectBase> = currentProjects.filter { p ->
+        searchFilter.isBlank() || p.name.contains(searchFilter, ignoreCase = true)
+    }
+
+    /** Resolves the selected sort option for the active style. */
+    private fun currentSortOption(): ProjectSortOption? {
+        val style = activeStyleId?.let { styleInstances[it] } ?: return null
+        val id = sortCombo.currentData() as? String ?: style.sortOptions.firstOrNull()?.id
+        return style.sortOptions.firstOrNull { it.id == id }
+    }
+
+    /** Updates search text from external callers. */
     fun onSearchTextChanged(text: String) {
         searchFilter = text.lowercase()
         searchDebounceTimer.start()
     }
 
-    private inner class ListProjectLayout : ProjectLayout {
-        override val widget = QWidget()
-        private val layout = QVBoxLayout(widget).apply {
-            setAlignment(Qt.AlignmentFlag.AlignTop)
-            contentsMargins = 20.m
-            widgetSpacing = 10
-        }
-
-        private val items = mutableListOf<ProjectCard>()
-
-        override fun setProjects(projects: List<ProjectBase>) {
-            clear()
-            items.clear()
-
-            if (projects.isEmpty()) {
-                val label = QLabel("No available projects")
-                label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-                layout.addWidget(label)
-                layout.addStretch(1)
-                return
-            }
-
-            projects.forEach { p ->
-                logger.info("Listed Project: {}", p.name)
-                val card = ProjectCard(p)
-                layout.addWidget(card)
-                items += card
-            }
-            layout.addStretch(1)
-            applyFilter(searchFilter)
-        }
-
-        override fun applyFilter(filter: String) {
-            val q = filter.trim()
-            val qLower = q.lowercase()
-            val pattern = if (q.isBlank()) null else Regex(Regex.escape(q), RegexOption.IGNORE_CASE)
-
-            var visibleCount = 0
-            items.forEach { card ->
-                val matches = q.isBlank() || card.project.name.lowercase().contains(qLower)
-                if (matches) {
-                    visibleCount++
-                    card.setHighlight(pattern)
-                    card.setVisibleWithFade(true)
-                } else {
-                    card.setHighlight(null)
-                    card.setVisibleWithFade(false)
-                }
-            }
-
-            if (visibleCount == 0) {
-                if (noResultsLabel == null) {
-                    noResultsLabel = QLabel("No projects match your search").apply {
-                        setAlignment(Qt.AlignmentFlag.AlignCenter)
-                    }
-                    layout.addWidget(noResultsLabel)
-                    layout.addStretch(1)
-                } else {
-                    noResultsLabel?.isVisible = true
-                }
-            } else {
-                noResultsLabel?.isVisible = false
-            }
-        }
-
-        override fun clear() {
-            clearLayout(layout)
-        }
-    }
-
-    private inner class GridProjectLayout : ProjectLayout {
-        override val widget = QWidget()
-        private val outerLayout = QVBoxLayout(widget).apply {
-            contentsMargins = 12.m
-            widgetSpacing = 8
-        }
-        private val gridContainer = QWidget()
-        private val gridLayout = QGridLayout(gridContainer).apply {
-            setHorizontalSpacing(12)
-            setVerticalSpacing(12)
-            contentsMargins = 0.m
-        }
-
-        private val items = mutableListOf<ProjectCard>()
-        private var columns = 1
-
-        init {
-            outerLayout.addWidget(gridContainer)
-            // Recompute columns on resize
-            gridContainer.installEventFilter(object : QObject() {
-                override fun eventFilter(o: QObject?, e: QEvent?): Boolean {
-                    if (e is QResizeEvent) {
-                        recomputeAndRelayout()
-                    }
-                    return super.eventFilter(o, e)
-                }
-            })
-        }
-
-        override fun setProjects(projects: List<ProjectBase>) {
-            clear()
-            items.clear()
-
-            if (projects.isEmpty()) {
-                val label = QLabel("No available projects")
-                label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-                outerLayout.addWidget(label)
-                outerLayout.addStretch(1)
-                return
-            }
-
-            projects.forEach { p ->
-                val card = ProjectCard(p).apply {
-                    // make cards a bit more compact for grid
-                    minimumSize = qs(180, 90)
-                }
-                items += card
-            }
-
-            recomputeAndRelayout()
-            applyFilter(searchFilter)
-        }
-
-        private fun recomputeAndRelayout() {
-            val w = gridContainer.width.takeIf { it > 0 } ?: gridContainer.sizeHint.width()
-            val cardWidth = 220
-            val newCols = maxOf(1, w / cardWidth)
-            if (newCols == columns && gridLayout.count() > 0) return
-
-            columns = newCols
-            clearLayout(gridLayout)
-
-            items.forEachIndexed { idx, card ->
-                val row = idx / columns
-                val col = idx % columns
-                gridLayout.addWidget(card, row, col)
-            }
-            widget.update()
-            widget.repaint()
-        }
-
-        override fun applyFilter(filter: String) {
-            val q = filter.trim()
-            val qLower = q.lowercase()
-            val pattern = if (q.isBlank()) null else Regex(Regex.escape(q), RegexOption.IGNORE_CASE)
-
-            var visibleCount = 0
-            items.forEach { card ->
-                val matches = q.isBlank() || card.project.name.lowercase().contains(qLower)
-                if (matches) {
-                    visibleCount++
-                    card.setHighlight(pattern)
-                    card.setVisibleWithFade(true)
-                } else {
-                    card.setHighlight(null)
-                    card.setVisibleWithFade(false)
-                }
-            }
-
-            if (visibleCount == 0) {
-                if (noResultsLabel == null) {
-                    noResultsLabel = QLabel("No projects match your search").apply {
-                        setAlignment(Qt.AlignmentFlag.AlignCenter)
-                    }
-                    outerLayout.addWidget(noResultsLabel)
-                    outerLayout.addStretch(1)
-                } else {
-                    noResultsLabel?.isVisible = true
-                }
-            } else {
-                noResultsLabel?.isVisible = false
-            }
-
-            recomputeAndRelayout()
-        }
-
-        override fun clear() {
-            clearLayout(gridLayout)
-            clearLayout(outerLayout)
-            outerLayout.addWidget(gridContainer)
-        }
-    }
-
-    private inner class CompactProjectLayout : ProjectLayout {
-        override val widget = QWidget()
-        private val layout = QVBoxLayout(widget).apply {
-            setAlignment(Qt.AlignmentFlag.AlignTop)
-            contentsMargins = 10.m
-            widgetSpacing = 6
-        }
-        private val items = mutableListOf<ProjectCard>()
-
-        override fun setProjects(projects: List<ProjectBase>) {
-            clear()
-            items.clear()
-
-            if (projects.isEmpty()) {
-                val label = QLabel("No available projects")
-                label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-                layout.addWidget(label)
-                layout.addStretch(1)
-                return
-            }
-
-            projects.forEach { p ->
-                val card = ProjectCard(p).apply {
-                    minimumSize = qs(0, 56)
-                    titleLabel.styleSheet = "font-size: 13px;"
-                }
-                layout.addWidget(card)
-                items += card
-            }
-            layout.addStretch(1)
-            applyFilter(searchFilter)
-        }
-
-        override fun applyFilter(filter: String) {
-            val q = filter.trim()
-            val qLower = q.lowercase()
-            val pattern = if (q.isBlank()) null else Regex(Regex.escape(q), RegexOption.IGNORE_CASE)
-
-            var visibleCount = 0
-            items.forEach { card ->
-                val matches = q.isBlank() || card.project.name.lowercase().contains(qLower)
-                if (matches) {
-                    visibleCount++
-                    card.setHighlight(pattern)
-                    card.setVisibleWithFade(true)
-                } else {
-                    card.setHighlight(null)
-                    card.setVisibleWithFade(false)
-                }
-            }
-
-            if (visibleCount == 0) {
-                if (noResultsLabel == null) {
-                    noResultsLabel = QLabel("No projects match your search").apply {
-                        setAlignment(Qt.AlignmentFlag.AlignCenter)
-                    }
-                    layout.addWidget(noResultsLabel)
-                    layout.addStretch(1)
-                } else {
-                    noResultsLabel?.isVisible = true
-                }
-            } else {
-                noResultsLabel?.isVisible = false
-            }
-        }
-
-        override fun clear() {
-            clearLayout(layout)
-        }
-    }
-}
-
-class ProjectCard(val project: ProjectBase): QWidget() {
-
-    private var hovered = false
-    private var selected = false
-
-    val titleLabel = QLabel(project.name).apply {
-        textFormat = Qt.TextFormat.RichText
-        styleSheet = "font-size: 16px;"
-        text = escapeHtml(project.name)
-    }
-
-    private val opacityEffect = QGraphicsOpacityEffect(this).apply {
-        opacity = 1.0
-        setParent(this@ProjectCard)
-    }
-
-    private var currentAnimation: QPropertyAnimation? = null
-    private var visibleState = true
-
-    init {
-        objectName = "ProjectCard_${System.identityHashCode(this)}"
-        setAttribute(Qt.WidgetAttribute.WA_StyledBackground, true)
-
-        focusPolicy = Qt.FocusPolicy.StrongFocus
-
-        val layout = QHBoxLayout(this)
-        layout.contentsMargins = 10.m
-        layout.widgetSpacing = 5
-
-        val iconLabel = QLabel()
-        val pix: QPixmap? = try {
-            loadQtImage(project.icon, 50, 50)
-        } catch (_: Throwable) {
-            null
-        }
-        iconLabel.pixmap = pix ?: QPixmap()
-        iconLabel.minimumSize = qs(50, 50)
-        layout.addWidget(iconLabel)
-
-        layout.addWidget(titleLabel, 1)
-
-        setGraphicsEffect(opacityEffect)
-
-        updateStyle()
-        cursor = QCursor(Qt.CursorShape.PointingHandCursor)
-
-        QTimer.singleShot(0) {
-            setHighlight(null)
-            opacityEffect.opacity = 1.0
-        }
-    }
-
-    fun setHighlight(pattern: Regex?) {
-        if (pattern == null) {
-            titleLabel.text = escapeHtml(project.name)
-            return
-        }
-
-        try {
-            val sb = StringBuilder()
-            var lastIndex = 0
-            val matches = pattern.findAll(project.name).toList()
-            if (matches.isEmpty()) {
-                titleLabel.text = escapeHtml(project.name)
-                return
-            }
-
-            val color = ThemeMngr.getColorHex("Accent")
-            for (m in matches) {
-                val start = m.range.first
-                val end = m.range.last + 1
-                if (start > lastIndex) {
-                    sb.append(escapeHtml(project.name.substring(lastIndex, start)))
-                }
-                val matched = escapeHtml(project.name.substring(start, end))
-                sb.append("<span style=\"background-color: $color; border-radius: 4px; padding: 0 2px;\">")
-                sb.append(matched)
-                sb.append("</span>")
-                lastIndex = end
-            }
-            if (lastIndex < project.name.length) {
-                sb.append(escapeHtml(project.name.substring(lastIndex)))
-            }
-            titleLabel.text = sb.toString()
-        } catch (_: Throwable) {
-            titleLabel.text = escapeHtml(project.name)
-        }
-    }
-
-
-    private fun escapeHtml(s: String): String =
-        s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
-
-    fun setVisibleWithFade(show: Boolean, durationMs: Int = 180, immediate: Boolean = false) {
-        if (show == visibleState && currentAnimation == null) return
-
-        currentAnimation?.let {
-            it.stop()
-            currentAnimation = null
-        }
-
-        if (immediate) {
-            opacityEffect.opacity = if (show) 1.0 else 0.0
-            isVisible = show
-            visibleState = show
-            return
-        }
-
-        val anim = QPropertyAnimation(opacityEffect, "opacity")
-        anim.setParent(this)
-        anim.duration = durationMs
-        anim.easingCurve = QEasingCurve(QEasingCurve.Type.InOutQuad)
-
-        if (show) {
-            if (!isVisible) isVisible = true
-            val start = opacityEffect.opacity
-            anim.startValue = start
-            anim.endValue = 1.0
-            anim.finished.connect {
-                visibleState = true
-                currentAnimation = null
-            }
-            currentAnimation = anim
-            anim.start()
-        } else {
-            val start = opacityEffect.opacity
-            anim.startValue = start
-            anim.endValue = 0.0
-            anim.finished.connect {
-                QTimer.singleShot(0) {
-                    isVisible = false
-                    setHighlight(null)
-                    visibleState = false
-                    currentAnimation = null
-                }
-            }
-            currentAnimation = anim
-            anim.start()
-        }
-    }
-
-    private fun openProject() {
-        dashboardLogger.info("Open Project ${project.name}")
-
-
-        try {
-//            ProjectMngr.openProject(project)
-        } catch (t: Throwable) {
-            dashboardLogger.error("Failed to open project: ${t.message}", t)
-        }
-
-//        Dashboard.I?.let {
-//            try { it.close() } catch (_: Throwable) {}
-//        }
-    }
-
-    private fun updateStyle() {
-        val radius = 8
-
-        val hoverBg = ThemeMngr.getColorHex("Accent")!!.hexToRgbString()
-        val id = objectName.takeIf { !it.isNullOrBlank() } ?: "ProjectCard"
-        val bgValue = if(hovered || selected) hoverBg else "transparent"
-
-        val sheet = buildString {
-            append("background-color: $bgValue;")
-            append("border-radius: ${radius}px;")
-        }
-
-        setAttribute(Qt.WidgetAttribute.WA_StyledBackground, true)
-        styleSheet = sheet
-
-        update()
-        repaint()
-    }
-
-    override fun enterEvent(event: @Nullable QEnterEvent?) {
-        super.enterEvent(event)
-        if(!hasFocus()) setFocus()
-        hovered = true
-        updateStyle()
-    }
-
-    override fun leaveEvent(event: @Nullable QEvent?) {
-        super.leaveEvent(event)
-        hovered = false
-        updateStyle()
-    }
-
-    override fun focusInEvent(event: @Nullable QFocusEvent?) {
-        super.focusInEvent(event)
-        selected = true
-        updateStyle()
-    }
-
-    override fun focusOutEvent(event: @Nullable QFocusEvent?) {
-        super.focusOutEvent(event)
-        selected = false
-        hovered = false
-        updateStyle()
-    }
-
-    override fun mousePressEvent(event: @Nullable QMouseEvent?) {
-        super.mousePressEvent(event)
-        setFocus()
-        if(event?.button() == Qt.MouseButton.LeftButton) {
-            openProject()
-        }
+    /** Forces a refresh of the active style layout. */
+    private fun requestRefresh() {
+        applyFilter(immediate = true)
     }
 }

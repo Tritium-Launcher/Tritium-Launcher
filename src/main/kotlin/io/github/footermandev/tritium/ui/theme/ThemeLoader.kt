@@ -1,9 +1,8 @@
 package io.github.footermandev.tritium.ui.theme
 
+import io.github.footermandev.tritium.io.VPath
 import kotlinx.serialization.json.Json
 import java.io.InputStream
-import java.nio.file.Files
-import java.nio.file.Path
 
 object ThemeLoader {
     private val json = Json { ignoreUnknownKeys = true }
@@ -15,7 +14,7 @@ object ThemeLoader {
     }
 
     @Throws(Exception::class)
-    fun loadFromFile(path: Path): ThemeFile = Files.newInputStream(path).use { return loadFromStream(it) }
+    fun loadFromFile(path: VPath): ThemeFile = path.inputStream().use { return loadFromStream(it) }
 
     fun merge(base: ThemeFile?, override: ThemeFile): ThemeFile {
         if(base == null) return override

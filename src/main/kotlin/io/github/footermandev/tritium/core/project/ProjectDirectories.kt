@@ -1,5 +1,8 @@
 package io.github.footermandev.tritium.core.project
 
+/**
+ * Common directory names within a project.
+ */
 enum class ProjectDirectories {
     MODS,
     CONFIG,

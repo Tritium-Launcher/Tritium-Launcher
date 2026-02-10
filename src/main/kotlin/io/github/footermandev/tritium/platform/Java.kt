@@ -3,9 +3,12 @@ package io.github.footermandev.tritium.platform
 import java.io.File
 import java.util.concurrent.TimeUnit
 
+/**
+ * General entrypoint for Java-related actions.
+ */
 object Java {
     fun test(path: String): Boolean {
-        val exec = if(Platform.isWin) {
+        val exec = if(Platform.isWindows) {
             File(path, "bin\\java.exe")
         } else {
             File(path, "bin/java")
@@ -66,6 +69,36 @@ object Java {
             val candidate = File(javaHome, "bin/java")
             if(candidate.exists() && candidate.canExecute()) {
                 foundExecutables.add(candidate.absoluteFile)
+            }
+        }
+
+        // Common Java install locations (SDKMAN, system JVM dirs, MacOSX, Windows)
+        val home = System.getProperty("user.home") ?: ""
+        val commonHomes = listOfNotNull(
+            if(home.isNotBlank()) File(home, ".sdkman/candidates/java") else null,
+            File("/usr/lib/jvm"),
+            File("/usr/java"),
+            File("/opt/java"),
+            File("/Library/Java/JavaVirtualMachines"),
+            File("C:\\Program Files\\Java"),
+            File("C:\\Program Files (x86)\\Java")
+        )
+
+        for(root in commonHomes) {
+            if(!root.exists() || !root.isDirectory) continue
+            val children = root.listFiles() ?: continue
+            for(dir in children) {
+                if(!dir.isDirectory) continue
+                val candidate = if(Platform.isWindows) {
+                    File(dir, "bin\\java.exe")
+                } else {
+                    // MacOSX .jdk bundles keep binaries under Contents/Home/bin
+                    val macCandidate = File(dir, "Contents/Home/bin/java")
+                    if(macCandidate.exists() && macCandidate.canExecute()) macCandidate else File(dir, "bin/java")
+                }
+                if(candidate.exists() && candidate.canExecute()) {
+                    foundExecutables.add(candidate.absoluteFile)
+                }
             }
         }
 

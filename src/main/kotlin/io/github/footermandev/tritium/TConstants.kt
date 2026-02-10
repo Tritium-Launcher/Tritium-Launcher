@@ -1,13 +1,31 @@
 package io.github.footermandev.tritium
 
+import io.github.footermandev.tritium.io.VPath
+
 object TConstants {
     const val TR = "Tritium"
     const val TR_SERVICE = "TritiumLauncher"
-    const val CLIENT_ID = "6d6b484d-842d-47c9-abe1-e4f0c5f07c77"
-    const val FACE_URL = "https://crafatar.com/avatars/"
-    val TR_DIR = "${System.getProperty("user.home")}/tritium"
-    val OS = System.getProperty("os.name").lowercase()
+    const val VERSION = "0.0.0"
+    val TR_DIR: VPath = fromTR()
 
-    val PLUGIN_DIR = fromTR("plugins")
+    object Dirs {
+        const val PROJECTS = "projects"
+        const val EXTENSIONS = "extensions"
+        const val LOADERS = "loaders"
+        const val CACHE = "cache"
+        const val PROFILES = ".profiles"
+        const val MSAL = ".msal"
+        const val ASSETS = "assets"
+    }
+
+    val EXT_DIR = fromTR(Dirs.EXTENSIONS)
     val classLoader: ClassLoader = javaClass.classLoader
+
+    object Lists {
+        val ImageExtensions = listOf(
+            "png", "jpg", "jpeg", "jpe", "gif", "bmp", "tiff", "tif", "webp", "avif", "heic", "heif", "jp2",
+            "jxl", "ico", "cur", "dds", "exr", "svg", "svgz", "eps", "pdf", "ai", "cdr", "raw", "dng", "nef", "cr2",
+            "cr3", "arw", "orf", "rw2", "pef", "aseprite"
+        )
+    }
 }

@@ -1,19 +1,19 @@
 package io.github.footermandev.tritium
 
+import io.github.footermandev.tritium.io.VPath
+import io.qt.core.QPoint
 import io.qt.core.QSize
 import io.qt.core.Qt
+import io.qt.gui.QGuiApplication
 import io.qt.gui.QIcon
 import io.qt.gui.QImage
 import io.qt.gui.QPixmap
-import org.koin.core.context.GlobalContext
+import io.qt.widgets.QApplication
+import io.qt.widgets.QWidget
 import org.slf4j.Logger
 import org.slf4j.LoggerFactory
-import java.awt.Image
-import java.awt.image.BufferedImage
-import java.io.ByteArrayOutputStream
 import java.io.File
-import java.util.prefs.Preferences
-import javax.imageio.ImageIO
+import kotlin.reflect.KClass
 
 private val logger = LoggerFactory.getLogger("GlobalFunctions") //TODO: Make a central io.github.footermandev.tritium.logger for things like this and others
 val koinLogger: Logger = LoggerFactory.getLogger("Koin")
@@ -33,70 +33,68 @@ fun getEnv(key: String): String? {
 }
 
 /**
- * Returns File from ~/
- */
-fun fromHome(child: String): File {
-    return File(getProperty("user.home"), child)
-}
-
-/**
- * Returns File from ~/.tritium
- */
-fun fromTR(child: String = ""): File {
-    return File(fromHome("tritium"), child)
-}
-
-/**
  * Returns the user home directory
  */
-val userHome get() = getProperty("user.home")
+val userHome: VPath get() = VPath.get(System.getProperty("user.home"))
 
 /**
- * Returns the Tritium directory
+ * Returns [File] from ~/
  */
-val trHome: String get() = fromTR("").absolutePath
+fun fromHome(vararg child: String): VPath {
+    return VPath.get(getProperty("user.home"), *child)
+}
 
 /**
- * Returns the XDG Config Home directory
+ * Returns [File] from ~/tritium
  */
-val xdgConfigHome get() = getEnv("XDG_CONFIG_HOME")
+fun fromTRFile(vararg child: String = arrayOf("")): File {
+    return VPath.get(userHome, "tritium", *child).toJFile()
+}
 
 /**
- * Returns the OS name
+ * Returns [VPath] from ~/tritium using VPath
  */
-val osName get() = getProperty("os.name")
+fun fromTR(first: VPath, vararg rest: VPath): VPath {
+    return VPath.get(userHome, VPath.parse("tritium"), first, *rest)
+}
 
-fun loadQtImage(pathStr: String, targetW: Int, targetH: Int): QPixmap? {
-    try {
-        val p: java.nio.file.Path = java.nio.file.Path.of(pathStr)
-        if (!p.toFile().exists()) return null
+/**
+ * Returns [VPath] from ~/tritium using String
+ */
+fun fromTR(first: String, vararg rest: String): VPath {
+    return VPath.get(userHome, "tritium", first, *rest)
+}
 
-        val qimg = QImage(pathStr)
-        if (qimg.isNull) {
-            return null
+/**
+ * Returns [VPath] to ~/tritium
+ */
+fun fromTR(): VPath {
+    return VPath.get(userHome, "tritium")
+}
+
+/**
+ * Returns the current screen's DPR value
+ */
+fun currentDpr(widget: QWidget?): Double {
+    val screen = widget?.let { w ->
+        try {
+            QGuiApplication.screenAt(w.mapToGlobal(QPoint(0, 0)))
+        } catch (_: Throwable) {
+            null
         }
-
-        val sourceW = qimg.width()
-        val sourceH = qimg.height()
-
-        val transformMode = if (sourceW <= 32 || sourceH <= 32) {
-            Qt.TransformationMode.FastTransformation
-        } else {
-            Qt.TransformationMode.SmoothTransformation
-        }
-
-        val scaled = qimg.scaled(
-            targetW,
-            targetH,
-            Qt.AspectRatioMode.IgnoreAspectRatio,
-            transformMode
-        )
-
-        return QPixmap.fromImage(scaled)
-    } catch (t: Throwable) {
-        logger.error("Failed to load project icon via Qt: ${t.message}", t)
-        return null
+    } ?: widget?.window()?.windowHandle()?.screen()
+    if(screen != null) {
+        val dpr = screen.devicePixelRatio
+        if(dpr > 0.0) return dpr
     }
+
+    val own = widget?.devicePixelRatio()
+    if(own != null && own > 0.0) return own
+
+    val primary = QGuiApplication.primaryScreen()?.devicePixelRatio
+    if(primary != null && primary > 0.0) return primary
+
+    return 1.0
 }
 
 fun resourceIcon(resource: String, classLoader: ClassLoader): QIcon? {
@@ -116,54 +114,6 @@ fun resourceIcon(resource: String, classLoader: ClassLoader): QIcon? {
     }
 }
 
-// TODO: Ugh god, this needs to not use AWT nonsense.
-fun loadImageQt(url: String, width: Int? = null, height: Int? = null, border: Boolean = false): QPixmap? = try {
-    val original: BufferedImage = ImageIO.read(url.toUrl())
-        ?: return null
-
-    val image: Image = when {
-        width == null && height == null -> original
-        width != null && height != null -> original.getScaledInstance(width, height, BufferedImage.SCALE_SMOOTH)
-        width != null -> original.getScaledInstance(width, original.height, BufferedImage.SCALE_SMOOTH)
-        else -> original.getScaledInstance(original.width, height!!, BufferedImage.SCALE_SMOOTH)
-    }
-
-    val bufferedWithBorder = if (border) {
-        val w = image.getWidth(null) + 4
-        val h = image.getHeight(null) + 4
-        val buffered = BufferedImage(w, h, BufferedImage.TYPE_INT_ARGB)
-        val g = buffered.createGraphics()
-        g.color = java.awt.Color(0, 0, 0)
-        g.fillRect(0, 0, w, h)
-        g.drawImage(image, 2, 2, null)
-        g.dispose()
-        buffered
-    } else {
-        when (image) {
-            is BufferedImage -> image
-            else -> {
-                val b = BufferedImage(image.getWidth(null), image.getHeight(null), BufferedImage.TYPE_INT_ARGB)
-                val g = b.createGraphics()
-                g.drawImage(image, 0, 0, null)
-                g.dispose()
-                b
-            }
-        }
-    }
-
-    val baos = ByteArrayOutputStream()
-    ImageIO.write(bufferedWithBorder, "png", baos)
-    baos.flush()
-    val bytes = baos.toByteArray()
-    baos.close()
-
-    val qimage = QImage.fromData(bytes)
-    QPixmap.fromImage(qimage)
-} catch (e: Exception) {
-    logger.error("Failed to load image for Qt: ${e.message}", e)
-    null
-}
-
 /**
  * Makes a quick [Logger] with the name of the class it is created in.
  */
@@ -172,6 +122,7 @@ fun Any.logger(): Logger {
 }
 
 fun logger(name: String): Logger = LoggerFactory.getLogger(name)
+fun logger(any: KClass<*>): Logger = LoggerFactory.getLogger(any.java)
 
 fun compareMCVersions(ver1: String, ver2: String): Boolean {
     fun parse(v: String): Triple<Int, Int, Int> {
@@ -193,12 +144,58 @@ fun compareMCVersions(ver1: String, ver2: String): Boolean {
     }
 }
 
-fun tPreferences(path: String) = Preferences.userRoot().node("tritiumlauncher/$path")
-
-inline fun <reified T> getFromKoin(): List<T> {
-    val all = GlobalContext.get().getAll<T>()
-    koinLogger.info("Found ${all.size} instances of ${T::class.simpleName}")
-    return all
+/**
+ * Format a duration in milliseconds as "m s ms", omitting larger units when zero.
+ */
+fun formatDurationMs(totalMs: Long): String {
+    if (totalMs < 1000) return "$totalMs ms"
+    val minutes = totalMs / 60000
+    val seconds = (totalMs % 60000) / 1000
+    val ms = totalMs % 1000
+    return if (minutes > 0) {
+        "$minutes m $seconds s $ms ms"
+    } else {
+        "$seconds s $ms ms"
+    }
 }
 
-fun qs(w: Int, h: Int): QSize = QSize(w, h)
+fun qs(w: Int, h: Int = -1): QSize = if(h == -1) QSize(w,w) else QSize(w, h)
+
+val activeWindow: QWidget?
+    get() {
+        if(QApplication.instance() != null) return QApplication.activeWindow()
+        return null
+    }
+
+fun loadScaledPixmap(path: String, target: QSize, dprWidgetRef: QWidget? = null): QPixmap = try {
+    val img = QImage(path)
+    if (img.isNull) {
+        QPixmap()
+    } else {
+        val dpr = dprWidgetRef?.window()?.windowHandle()?.screen()?.devicePixelRatio
+            ?: QGuiApplication.primaryScreen()?.devicePixelRatio()
+            ?: 1.0
+
+        val scaleUp = target.width() * dpr > img.width() || target.height() * dpr > img.height()
+        val mode = if (scaleUp) Qt.TransformationMode.FastTransformation else Qt.TransformationMode.SmoothTransformation
+
+        val scaledImg = img.scaled(
+            kotlin.math.ceil(target.width() * dpr).toInt(),
+            kotlin.math.ceil(target.height() * dpr).toInt(),
+            Qt.AspectRatioMode.KeepAspectRatio,
+            mode
+        )
+        var pix = QPixmap.fromImage(scaledImg)
+        pix.setDevicePixelRatio(dpr)
+
+        val logicalWidth = pix.width() / dpr
+        val logicalHeight = pix.height() / dpr
+        if (logicalWidth < target.width() || logicalHeight < target.height()) {
+            pix = pix.scaled(target, Qt.AspectRatioMode.KeepAspectRatio, mode)
+            pix.setDevicePixelRatio(1.0)
+        }
+        pix
+    }
+} catch (_: Throwable) {
+    QPixmap()
+}
