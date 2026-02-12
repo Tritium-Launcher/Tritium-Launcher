@@ -22,4 +22,4 @@ In its current form, Tritium is able to:
 * Support custom Editor panes for specific file types or menus
 * Use LSPs for specific file types
 
-There is much more planned, check out the Project tab to see progress on specific things.
+There is much more planned, check out the [TODO Project](https://github.com/orgs/Tritium-Launcher/projects/1) to see current progress.
