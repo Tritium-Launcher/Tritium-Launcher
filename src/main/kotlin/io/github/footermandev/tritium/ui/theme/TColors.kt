@@ -26,6 +26,7 @@ object TColors {
     val SelectedUI       get() = hex("SelectedUI")
     val Subtext          get() = hex("Subtext")
     val Accent           get() = hex("Accent")
+    val Green            get() = hex("Green")
     val Error            get() = hex("Error")
     val ValidationBorder get() = hex("ValidationBorder")
     val Highlight        get() = hex("Highlight")

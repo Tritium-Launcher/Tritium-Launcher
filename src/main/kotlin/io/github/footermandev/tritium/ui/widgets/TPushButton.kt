@@ -7,7 +7,10 @@ import io.github.footermandev.tritium.ui.theme.ThemeMngr
 import io.github.footermandev.tritium.ui.widgets.pixel.pixelSkin
 import io.qt.Nullable
 import io.qt.core.QEvent
-import io.qt.gui.*
+import io.qt.gui.QMoveEvent
+import io.qt.gui.QPaintEvent
+import io.qt.gui.QPainter
+import io.qt.gui.QShowEvent
 import io.qt.widgets.QPushButton
 import io.qt.widgets.QStyle
 import io.qt.widgets.QStyleOptionButton
@@ -33,6 +36,7 @@ class TPushButton(
     override fun paintEvent(event: QPaintEvent?) {
         val painter = QPainter(this)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, false)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, false)
 
         val w = width()
         val h = height()
@@ -49,7 +53,7 @@ class TPushButton(
         val bg = skin.render(state.key, w, h, dpr)
 
         if(!bg.isNull) {
-            painter.drawPixmap(0, 0, w, h, bg)
+            painter.drawPixmap(0, 0, bg)
         }
 
         drawLabel(painter, dpr)
@@ -107,22 +111,11 @@ class TPushButton(
     }
 
     private fun detectDpr(widget: QWidget?): Double {
-        try {
-            val screenDpr = widget?.window()?.windowHandle()?.screen()?.devicePixelRatio
-            if (screenDpr != null && screenDpr > 0.0) return screenDpr
-        } catch (_: Throwable) {}
-
-        try {
-            val wOwn = widget?.devicePixelRatio()
-            if (wOwn != null && wOwn > 0.0) return wOwn
-        } catch (_: Throwable) {}
-
-        try {
-            val primary = QGuiApplication.primaryScreen()?.devicePixelRatio
-            if (primary != null && primary > 0.0) return primary
-        } catch (_: Throwable) {}
-
-        return 1.0
+        return try {
+            currentDpr(widget)
+        } catch (_: Throwable) {
+            1.0
+        }
     }
 
     private fun handleDprChange(dpr: Double) {
