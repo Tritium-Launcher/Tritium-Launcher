@@ -92,7 +92,7 @@ object MicrosoftAuth {
      * @param onSignedIn Callback function called with the Minecraft profile after successful sign-in
      * @throws AuthenticationException if sign-in fails after all retry attempts
      */
-    suspend fun newSignIn(): MCProfile? {
+    suspend fun newSignIn(): ProfileMngr.MCProfile? {
         try {
             authLogger.info("Starting Microsoft sign-in")
             val parameters = InteractiveRequestParameters.builder("http://localhost".toURI())
@@ -122,7 +122,7 @@ object MicrosoftAuth {
     /**
      * Initiates device-code sign-in and returns the Minecraft profile on success.
      */
-    suspend fun deviceCodeSignIn(deviceCodeConsumer: (String) -> Unit): MCProfile? {
+    suspend fun deviceCodeSignIn(deviceCodeConsumer: (String) -> Unit): ProfileMngr.MCProfile? {
         val deviceParams = DeviceCodeFlowParameters.builder(
             authScopes
         ) { deviceCode -> deviceCodeConsumer(deviceCode.message()) }
@@ -172,7 +172,7 @@ object MicrosoftAuth {
     /**
      * Fetches a Minecraft profile for the provided Microsoft account id.
      */
-    suspend fun getMcProfileForAccount(homeAccountId: String): MCProfile? = withContext(Dispatchers.IO) {
+    suspend fun getMcProfileForAccount(homeAccountId: String): ProfileMngr.MCProfile? = withContext(Dispatchers.IO) {
         val account = MSAL.findAccount(homeAccountId = homeAccountId)
             ?: return@withContext null
 

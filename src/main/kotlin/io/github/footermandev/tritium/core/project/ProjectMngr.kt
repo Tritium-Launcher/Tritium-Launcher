@@ -5,6 +5,7 @@ import io.github.footermandev.tritium.core.project.templates.MigrationRegistry
 import io.github.footermandev.tritium.core.project.templates.ProjectFileLoader
 import io.github.footermandev.tritium.core.project.templates.TemplateDescriptor
 import io.github.footermandev.tritium.core.project.templates.TemplateRegistry
+import io.github.footermandev.tritium.extension.core.CoreSettingValues
 import io.github.footermandev.tritium.fromTR
 import io.github.footermandev.tritium.io.VPath
 import io.github.footermandev.tritium.logger
@@ -157,9 +158,10 @@ object ProjectMngr {
         logger.info("Loading project {}", project.name)
         val wasDifferent = activeProject !== project
         activeProject = project
+        val closeDashboard = CoreSettingValues.closeDashboardOnProjectOpen() && wasDifferent
 
         try {
-            ProjectWindows.openProject(project, closeDashboard = wasDifferent)
+            ProjectWindows.openProject(project, closeDashboard = closeDashboard)
         } catch (t: Throwable) {
             logger.debug("Failed to open project", t)
         }

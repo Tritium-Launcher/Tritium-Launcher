@@ -1,16 +1,18 @@
 package io.github.footermandev.tritium.ui.dashboard
 
 import io.github.footermandev.tritium.*
+import io.github.footermandev.tritium.extension.core.CoreSettingValues
+import io.github.footermandev.tritium.ui.settings.SettingsLink
 import io.github.footermandev.tritium.ui.theme.TColors
 import io.github.footermandev.tritium.ui.theme.TIcons
 import io.github.footermandev.tritium.ui.theme.qt.setThemedStyle
 import io.github.footermandev.tritium.ui.widgets.constructor_functions.hBoxLayout
+import io.github.footermandev.tritium.ui.widgets.constructor_functions.label
 import io.github.footermandev.tritium.ui.widgets.constructor_functions.qWidget
 import io.github.footermandev.tritium.ui.widgets.constructor_functions.vBoxLayout
 import io.qt.core.Qt
 import io.qt.gui.QIcon
 import io.qt.widgets.*
-import java.awt.Color
 
 /**
  * The main window for viewing Projects, Accounts, Themes and Settings.
@@ -37,12 +39,15 @@ class Dashboard internal constructor() : QMainWindow() {
         frameShape = QFrame.Shape.NoFrame
         lineWidth = 0
     }
+    private var settingsBtn: QPushButton
+    private val settingsDialog by lazy { SettingsDialog(this) }
     private var selectedButton: QPushButton? = null
+    private val dashboardWindowSize: Pair<Int, Int> = CoreSettingValues.dashboardWindowSize()
 
     init {
         windowTitle = "Tritium - Dashboard"
-        minimumSize = qs(650, 400)
-        maximumSize = qs(650, 400)
+        minimumSize = qs(dashboardWindowSize.first, dashboardWindowSize.second)
+        maximumSize = qs(dashboardWindowSize.first, dashboardWindowSize.second)
         isWindowModified = false
         windowIcon = QIcon(TIcons.Tritium)
 
@@ -66,10 +71,47 @@ class Dashboard internal constructor() : QMainWindow() {
         leftLayout.contentsMargins = 10.m
         leftLayout.widgetSpacing = 0
 
+        val tritiumWidget = qWidget {
+            objectName = "dashboardTritium"
+            setContentsMargins(0, 0, 0, 0)
+        }
+        val tritiumLayout = hBoxLayout(tritiumWidget) {
+            contentsMargins = 6.m
+            widgetSpacing = 8
+        }
+        val tritiumIconLabel = label {
+            objectName = "dashboardTritiumIcon"
+            val icon = TIcons.Tritium
+            if (!icon.isNull) {
+                pixmap = icon.scaled(qs(22, 22), Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.FastTransformation)
+            }
+            minimumSize = qs(22, 22)
+            maximumSize = qs(22, 22)
+        }
+        val tritiumTextWidget = qWidget {
+            objectName = "dashboardTritiumText"
+            setContentsMargins(0, 0, 0, 0)
+        }
+        val tritiumTextLayout = vBoxLayout(tritiumTextWidget) {
+            contentsMargins = 0.m
+            widgetSpacing = 0
+        }
+        val tritiumTitleLabel = label("Tritium") {
+            objectName = "dashboardTritiumTitle"
+        }
+        val tritiumVersionLabel = label("v${TConstants.VERSION}") {
+            objectName = "dashboardTritiumVersion"
+        }
+        tritiumTextLayout.add(tritiumTitleLabel, tritiumVersionLabel)
+        tritiumLayout.addWidget(tritiumIconLabel, 0)
+        tritiumLayout.addWidget(tritiumTextWidget, 1)
+
         val projectsBtn = createNavBtn("Projects")
         val accountBtn  = createNavBtn("Accounts")
         val themesBtn   = createNavBtn("Themes")
-        val settingsBtn = createNavBtn("Settings")
+        settingsBtn = createNavBtn("Settings").apply {
+            isCheckable = false
+        }
 
         selectedButton = projectsBtn
         projectsBtn.isChecked = true
@@ -90,10 +132,11 @@ class Dashboard internal constructor() : QMainWindow() {
         }
 
         settingsBtn.onClicked {
-            updateSelectedBtn(settingsBtn)
-            stackedWidget.currentIndex = 3
+            openSettings()
         }
 
+        leftLayout.addWidget(tritiumWidget)
+        leftLayout.addSpacing(8)
         leftLayout.add(projectsBtn, accountBtn, themesBtn, settingsBtn)
         leftLayout.addStretch(1)
 
@@ -136,6 +179,21 @@ class Dashboard internal constructor() : QMainWindow() {
                 backgroundColor(TColors.Surface2)
             }
 
+            selector("#dashboardTritium") {
+                backgroundColor(TColors.Surface0)
+                border(1, TColors.Surface2)
+                borderRadius(6)
+            }
+            selector("#dashboardTritiumTitle") {
+                fontSize(13)
+                fontWeight(700)
+                color(TColors.Text)
+            }
+            selector("#dashboardTritiumVersion") {
+                fontSize(11)
+                color(TColors.Subtext)
+            }
+
             selector("#navBtn") {
                 borderRadius(4)
                 border()
@@ -170,13 +228,6 @@ class Dashboard internal constructor() : QMainWindow() {
         selectedButton = newBtn
     }
 
-    private fun qColorToCss(color: Color): String {
-        val r = color.red
-        val g = color.green
-        val b = color.blue
-        return "rgb($r,$g,$b)"
-    }
-
     private fun setupNavPanels() {
         // Projects
         val projectsPanel = ProjectsPanel()
@@ -189,9 +240,17 @@ class Dashboard internal constructor() : QMainWindow() {
         // Themes
         val themesPanel = ThemesPanel()
         stackedWidget.addWidget(themesPanel)
+    }
 
-        // TODO: Settings
-
-
+    /**
+     * Opens settings in a dedicated dialog and optionally focuses [link].
+     *
+     * @param link Optional target setting deep link.
+     */
+    fun openSettings(link: SettingsLink? = null) {
+        show()
+        raise()
+        activateWindow()
+        settingsDialog.open(link)
     }
 }

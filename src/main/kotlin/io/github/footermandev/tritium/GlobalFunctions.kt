@@ -1,9 +1,7 @@
 package io.github.footermandev.tritium
 
 import io.github.footermandev.tritium.io.VPath
-import io.qt.core.QPoint
-import io.qt.core.QSize
-import io.qt.core.Qt
+import io.qt.core.*
 import io.qt.gui.QGuiApplication
 import io.qt.gui.QIcon
 import io.qt.gui.QImage
@@ -76,24 +74,57 @@ fun fromTR(): VPath {
  * Returns the current screen's DPR value
  */
 fun currentDpr(widget: QWidget?): Double {
-    val screen = widget?.let { w ->
+    val app = QApplication.instance()
+    val guiThread = app?.thread()
+    if (app != null && guiThread != null && guiThread != QThread.currentThread()) {
+        var result = 1.0
         try {
-            QGuiApplication.screenAt(w.mapToGlobal(QPoint(0, 0)))
+            QMetaObject.invokeMethod(
+                app,
+                { result = currentDprOnGui(widget) },
+                Qt.ConnectionType.BlockingQueuedConnection
+            )
+            return result
         } catch (_: Throwable) {
-            null
+            return 1.0
         }
-    } ?: widget?.window()?.windowHandle()?.screen()
-    if(screen != null) {
-        val dpr = screen.devicePixelRatio
-        if(dpr > 0.0) return dpr
     }
 
-    val own = widget?.devicePixelRatio()
-    if(own != null && own > 0.0) return own
+    return currentDprOnGui(widget)
+}
 
-    val primary = QGuiApplication.primaryScreen()?.devicePixelRatio
-    if(primary != null && primary > 0.0) return primary
+private fun currentDprOnGui(widget: QWidget?): Double {
+    if (widget != null) {
+        widget.window()?.windowHandle()?.devicePixelRatio()?.let { dpr ->
+            if (dpr > 0.0) return dpr
+        }
 
+        try {
+            val widgetDpr = widget.devicePixelRatioF()
+            if (widgetDpr > 0.0) return widgetDpr
+        } catch (_: NoSuchMethodError) {
+        }
+
+        if (widget.isVisible && widget.width() > 0 && widget.height() > 0) {
+            val center = widget.mapToGlobal(QPoint(widget.width() / 2, widget.height() / 2))
+            QGuiApplication.screenAt(center)?.devicePixelRatio?.let { sDpr ->
+                if (sDpr > 0.0) return sDpr
+            }
+        } else {
+            try {
+                val probe = widget.mapToGlobal(QPoint(0, 0))
+                QGuiApplication.screenAt(probe)?.devicePixelRatio?.let { sDpr ->
+                    if (sDpr > 0.0) return sDpr
+                }
+            } catch (_: RuntimeException) {
+            }
+        }
+    }
+
+    // 4) Primary screen fallback
+    QGuiApplication.primaryScreen()?.devicePixelRatio?.takeIf { it > 0.0 }?.let { return it }
+
+    // Last resort
     return 1.0
 }
 

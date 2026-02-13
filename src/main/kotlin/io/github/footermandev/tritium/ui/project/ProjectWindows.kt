@@ -76,6 +76,52 @@ object ProjectWindows {
         return
     }
 
+    /**
+     * Returns any currently open project window if available.
+     *
+     * @return First completed project window, or `null`.
+     */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    fun anyOpenWindow(): ProjectViewWindow? {
+        openWindows.values.forEach { deferred ->
+            if (!deferred.isCompleted || deferred.isCancelled) return@forEach
+            val window = try {
+                deferred.getCompleted()
+            } catch (_: Throwable) {
+                return@forEach
+            }
+            if (window.isVisible) return window
+        }
+        return null
+    }
+
+    /**
+     * Ensures [project] has a window and then invokes [action] on the GUI thread.
+     *
+     * @param project Target project.
+     * @param closeDashboard Whether dashboard should close when a new window is created.
+     * @param action Action receiving the resolved project window.
+     */
+    @OptIn(ExperimentalCoroutinesApi::class)
+    fun withProjectWindow(
+        project: ProjectBase,
+        closeDashboard: Boolean = true,
+        action: (ProjectViewWindow) -> Unit
+    ) {
+        openProject(project, closeDashboard)
+        val canonical = project.path.toString().trim()
+        val deferred = openWindows[canonical] ?: return
+        deferred.invokeOnCompletion {
+            if (!deferred.isCompleted || deferred.isCancelled) return@invokeOnCompletion
+            val window = try {
+                deferred.getCompleted()
+            } catch (_: Throwable) {
+                return@invokeOnCompletion
+            }
+            runOnGuiThread { action(window) }
+        }
+    }
+
     private fun createWindowAsync(
         project: ProjectBase,
         deferred: CompletableDeferred<ProjectViewWindow>,

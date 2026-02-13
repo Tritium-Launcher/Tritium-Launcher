@@ -51,7 +51,7 @@ class Registry<T: Registrable>(
     fun register(entry: T) {
         if(isFrozen) throw RegistryFrozenException("Registry '$name' is frozen")
         validateLocalId(entry.id)
-        val namespacedId = "${ext.id.trim()}:${entry.id}"
+        val namespacedId = "${ext.namespace.trim()}:${entry.id}"
         validateNamespacedId(namespacedId)
         val prev = entries.putIfAbsent(entry.id, entry)
         if(prev != null) throw DuplicateRegistrationException("Duplicate id '${entry.id}' in registry '$name'")
@@ -66,7 +66,7 @@ class Registry<T: Registrable>(
         if(isFrozen) throw RegistryFrozenException("Registry '$name' is frozen")
         for(entry in items) {
             validateLocalId(entry.id)
-            val namespacedId = "${ext.id.trim()}:${entry.id}"
+            val namespacedId = "${ext.namespace.trim()}:${entry.id}"
             validateNamespacedId(namespacedId)
             val prev = entries.putIfAbsent(entry.id, entry)
             if (prev != null) throw DuplicateRegistrationException("Duplicate id '${entry.id}' in registry '$name'")

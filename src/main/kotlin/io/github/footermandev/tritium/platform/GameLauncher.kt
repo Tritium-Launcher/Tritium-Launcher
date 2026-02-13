@@ -6,9 +6,11 @@ import io.github.footermandev.tritium.core.modloader.LaunchContext
 import io.github.footermandev.tritium.core.modloader.ModLoader
 import io.github.footermandev.tritium.core.project.ModpackMeta
 import io.github.footermandev.tritium.core.project.ProjectBase
+import io.github.footermandev.tritium.extension.core.CoreSettingValues
 import io.github.footermandev.tritium.io.VPath
 import io.github.footermandev.tritium.koin.getRegistry
 import io.github.footermandev.tritium.logger
+import io.qt.gui.QGuiApplication
 import kotlinx.coroutines.*
 import kotlinx.serialization.json.*
 import java.io.File
@@ -124,7 +126,18 @@ object GameLauncher {
             return
         }
 
-        val gameArgs = buildGameArgs(versionObj, project.projectDir, assetsDir, assetIndexId, mcVersion, username, uuid, accessToken, mergedId)
+        val gameArgs = buildGameArgs(
+            versionObj = versionObj,
+            gameDir = project.projectDir,
+            assetsDir = assetsDir,
+            assetIndexId = assetIndexId,
+            mcVersion = mcVersion,
+            username = username,
+            uuid = uuid,
+            accessToken = accessToken,
+            mergedId = mergedId,
+            launchMaximized = CoreSettingValues.gameLaunchMaximized()
+        )
         val jvmArgs = buildJvmArgs(versionObj, project.projectDir, nativesDir, classpath).toMutableList()
         loader.prepareLaunchJvmArgs(context, classpathEntries, jvmArgs)
         if (loader.shouldStripMinecraftClientArtifacts(context)) {
@@ -237,8 +250,10 @@ object GameLauncher {
         username: String,
         uuid: String,
         accessToken: String,
-        mergedId: String
+        mergedId: String,
+        launchMaximized: Boolean
     ): List<String> {
+        val launchResolution = resolveLaunchResolution(launchMaximized)
         val replacements = mapOf(
             "\${auth_player_name}" to username,
             "\${version_name}" to mergedId,
@@ -253,8 +268,8 @@ object GameLauncher {
             "\${launcher_version}" to "0.0.0",
             "\${clientid}" to "",
             "\${auth_xuid}" to "",
-            "\${resolution_width}" to "1280",
-            "\${resolution_height}" to "720",
+            "\${resolution_width}" to launchResolution.first.toString(),
+            "\${resolution_height}" to launchResolution.second.toString(),
             "\${quickPlayPath}" to ""
         )
 
@@ -265,14 +280,14 @@ object GameLauncher {
             for (entry in gameArr) {
                 args += parseArgEntry(entry, replacements)
             }
-            return stripUnsupportedArgs(removeQuickPlayArgs(args))
+            return ensureWindowSizeArgs(stripUnsupportedArgs(removeQuickPlayArgs(args)), launchResolution)
         }
 
         val legacy = versionObj["minecraftArguments"]?.jsonPrimitive?.contentOrNull
         if (!legacy.isNullOrBlank()) {
             val split = legacy.split(" ")
             split.filter { it.isNotBlank() }.forEach { args += replaceTokens(it, replacements) }
-            return stripUnsupportedArgs(removeQuickPlayArgs(args))
+            return ensureWindowSizeArgs(stripUnsupportedArgs(removeQuickPlayArgs(args)), launchResolution)
         }
 
         args += listOf(
@@ -286,7 +301,64 @@ object GameLauncher {
             "--userType", "msa",
             "--versionType", "release"
         )
-        return stripUnsupportedArgs(removeQuickPlayArgs(args))
+        return ensureWindowSizeArgs(stripUnsupportedArgs(removeQuickPlayArgs(args)), launchResolution)
+    }
+
+    /**
+     * Resolves effective launch resolution from settings.
+     *
+     * When [launchMaximized] is enabled, this returns the primary screen's available geometry
+     * to approximate a maximized window while keeping a regular windowed launch.
+     */
+    private fun resolveLaunchResolution(launchMaximized: Boolean): Pair<Int, Int> {
+        val configured = CoreSettingValues.gameLaunchResolution()
+        if (!launchMaximized) return configured
+
+        return try {
+            val screen = QGuiApplication.primaryScreen()
+            val available = screen?.availableGeometry()
+            val width = available?.width() ?: 0
+            val height = available?.height() ?: 0
+            if (width > 0 && height > 0) {
+                width to height
+            } else {
+                configured
+            }
+        } catch (t: Throwable) {
+            logger.debug("Failed to read primary screen geometry for maximized launch size", t)
+            configured
+        }
+    }
+
+    /**
+     * Ensures game args contain exactly one width/height pair.
+     *
+     * Existing width/height arguments are removed first so runtime-selected launch sizing
+     * (settings or maximized resolution) always wins.
+     */
+    private fun ensureWindowSizeArgs(args: List<String>, launchResolution: Pair<Int, Int>): List<String> {
+        val out = mutableListOf<String>()
+        var i = 0
+        while (i < args.size) {
+            val a = args[i]
+            val normalized = a.lowercase()
+            if (a == "--width" || a == "--height") {
+                i += if (i + 1 < args.size) 2 else 1
+                continue
+            }
+            if (normalized.startsWith("--width=") || normalized.startsWith("--height=")) {
+                i++
+                continue
+            }
+            out += a
+            i++
+        }
+
+        out += listOf(
+            "--width", launchResolution.first.toString(),
+            "--height", launchResolution.second.toString()
+        )
+        return out
     }
 
     /**

@@ -11,11 +11,13 @@ import io.github.footermandev.tritium.core.project.templates.TemplateRegistry
 import io.github.footermandev.tritium.core.project.templates.generation.license.*
 import io.github.footermandev.tritium.extension.Extension
 import io.github.footermandev.tritium.registry.RegistryMngr
+import io.github.footermandev.tritium.settings.SettingsMngr
 import io.github.footermandev.tritium.ui.dashboard.DvdStyleProvider
 import io.github.footermandev.tritium.ui.dashboard.GridStyleProvider
 import io.github.footermandev.tritium.ui.dashboard.ListStyleProvider
 import io.github.footermandev.tritium.ui.project.editor.file.builtin.BuiltinFileTypes
 import io.github.footermandev.tritium.ui.project.editor.pane.ImageViewerProvider
+import io.github.footermandev.tritium.ui.project.editor.pane.SettingsEditorPaneProvider
 import io.github.footermandev.tritium.ui.project.editor.syntax.builtin.JsonLanguage
 import io.github.footermandev.tritium.ui.project.editor.syntax.builtin.PythonLanguage
 import io.github.footermandev.tritium.ui.project.menu.builtin.BuiltinMenuItems
@@ -30,6 +32,7 @@ internal object CoreExtension : Extension {
     private val coreModule = module {
         single(createdAtStart = true) {
             val rm: RegistryMngr = get()
+            val settings: SettingsMngr = get()
 
             val modLoaders        = BuiltinRegistries.ModLoader
             val modSources        = BuiltinRegistries.ModSource
@@ -42,6 +45,8 @@ internal object CoreExtension : Extension {
             val syntax            = BuiltinRegistries.SyntaxLanguage
             val editorPanes       = BuiltinRegistries.EditorPane
             val projectListStyles = BuiltinRegistries.ProjectListStyle
+
+            settings.register(this@CoreExtension.namespace, CoreSettings.registration)
 
             accountProviders.register(MicrosoftAccountProvider())
 
@@ -82,11 +87,12 @@ internal object CoreExtension : Extension {
             TemplateRegistry.register(ModpackTemplateDescriptor)
 
             editorPanes.register(ImageViewerProvider())
+            editorPanes.register(SettingsEditorPaneProvider())
             projectListStyles.register(listOf(GridStyleProvider, ListStyleProvider, DvdStyleProvider))
         }
     }
 
-    override val id: String = "tritium"
+    override val namespace: String = "tritium"
 
     override val modules: List<Module> = listOf(coreModule)
 }

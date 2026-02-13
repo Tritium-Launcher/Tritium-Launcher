@@ -38,6 +38,7 @@ dependencies {
     // Kotlin
     implementation(libs.kotlin.stdlib)
     implementation(libs.kotlinx.serialization.json)
+    implementation(libs.kotlinx.serialization.hocon)
     implementation(libs.kotlinx.coroutines.core)
     implementation("io.ktor:ktor-client-cio-jvm:3.3.1")
 

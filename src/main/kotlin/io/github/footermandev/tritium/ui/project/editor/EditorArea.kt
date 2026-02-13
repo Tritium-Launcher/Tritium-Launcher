@@ -48,7 +48,7 @@ class EditorArea(
 
     fun widget(): QWidget = container
 
-    fun openFile(file: VPath) {
+    fun openFile(file: VPath): EditorPane {
         val absolute = file.toAbsolute()
         val existing = paneIdx.entries.firstOrNull { it.value.file.toAbsolute() == absolute }
 
@@ -58,7 +58,7 @@ class EditorArea(
             val idx = existing.key
             tabBar.setCurrentIndex(idx)
             stack.currentIndex  = idx
-            return
+            return existing.value
         }
 
         val chosen = providersSnapshot.firstOrNull { it.canOpen(file, project) }
@@ -73,6 +73,7 @@ class EditorArea(
         tabBar.setCurrentIndex(idx)
         stack.currentIndex  = idx
         pane.onOpen()
+        return pane
     }
 
     private fun defaultTextPane(project: ProjectBase, file: VPath): EditorPane = object : EditorPane(project, file) {

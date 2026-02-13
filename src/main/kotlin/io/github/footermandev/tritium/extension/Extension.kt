@@ -31,6 +31,6 @@ import org.koin.core.module.Module
  * @see io.github.footermandev.tritium.ui.project.editor.EditorPane
  */
 interface Extension {
-    val id: String
+    val namespace: String
     val modules: List<Module>
 }

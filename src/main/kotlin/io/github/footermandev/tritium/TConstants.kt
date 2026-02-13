@@ -16,6 +16,7 @@ object TConstants {
         const val PROFILES = ".profiles"
         const val MSAL = ".msal"
         const val ASSETS = "assets"
+        const val SETTINGS = "settings"
     }
 
     val EXT_DIR = fromTR(Dirs.EXTENSIONS)

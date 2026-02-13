@@ -11,6 +11,7 @@ import io.github.footermandev.tritium.extension.ExtensionLoader
 import io.github.footermandev.tritium.extension.core.CoreExtension
 import io.github.footermandev.tritium.io.VPath
 import io.github.footermandev.tritium.registry.RegistryMngr
+import io.github.footermandev.tritium.settings.SettingsMngr
 import io.ktor.utils.io.core.*
 import org.koin.core.context.GlobalContext
 import org.koin.core.context.startKoin
@@ -21,6 +22,7 @@ import org.koin.logger.slf4jLogger
 
 private val registryCoreModule = module {
     single { RegistryMngr }
+    single { SettingsMngr }
 }
 
 /**

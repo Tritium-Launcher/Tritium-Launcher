@@ -3,15 +3,18 @@ package io.github.footermandev.tritium.ui.project
 import io.github.footermandev.tritium.connect
 import io.github.footermandev.tritium.core.project.ProjectBase
 import io.github.footermandev.tritium.core.project.ProjectMngr
+import io.github.footermandev.tritium.extension.core.CoreSettingValues
 import io.github.footermandev.tritium.io.VPath
 import io.github.footermandev.tritium.logger
 import io.github.footermandev.tritium.registry.DeferredRegistryBuilder
 import io.github.footermandev.tritium.registry.RegistryMngr
 import io.github.footermandev.tritium.ui.helpers.runOnGuiThread
 import io.github.footermandev.tritium.ui.project.editor.EditorArea
+import io.github.footermandev.tritium.ui.project.editor.pane.SettingsEditorPane
 import io.github.footermandev.tritium.ui.project.menu.MenuItem
 import io.github.footermandev.tritium.ui.project.menu.ProjectMenuBar
 import io.github.footermandev.tritium.ui.project.sidebar.SidePanelMngr
+import io.github.footermandev.tritium.ui.settings.SettingsLink
 import io.github.footermandev.tritium.util.ByteUtils
 import io.qt.Nullable
 import io.qt.core.QByteArray
@@ -38,6 +41,7 @@ class ProjectViewWindow internal constructor(
     private val tDir: VPath = project.projectDir.resolve(".tr")
     private val stateFile: VPath = tDir.resolve("tritium-ui.json")
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
+    private val defaultWindowSize: Pair<Int, Int> = CoreSettingValues.projectWindowDefaultSize()
 
     private val menuBarBuilder = ProjectMenuBar()
     private val editorArea = EditorArea(project)
@@ -88,13 +92,13 @@ class ProjectViewWindow internal constructor(
             state.mainWindowState?.let { restoreState(QByteArray(state.mainWindowState)) }
 
             if(!restored) {
-                resize(1280, 720)
+                resize(defaultWindowSize.first, defaultWindowSize.second)
             }
 
             editorArea.restoreOpenFiles(state.openFiles)
         } catch (t: Throwable) {
             logger.warn("Failed to apply UI state for '{}'", project.name, t)
-            resize(1280, 720)
+            resize(defaultWindowSize.first, defaultWindowSize.second)
         }
     }
 
@@ -132,6 +136,18 @@ class ProjectViewWindow internal constructor(
     }
 
     fun rebuildMenus() { menuBarBuilder.rebuildFor(this, project, null) }
+
+    /**
+     * Opens the project settings editor tab and optionally focuses [link].
+     *
+     * @param link Optional target setting deep link.
+     */
+    fun openSettings(link: SettingsLink? = null) {
+        val pane = editorArea.openFile(project.projectDir.resolve(".tr/settings.conf"))
+        if (link != null && pane is SettingsEditorPane) {
+            pane.openLink(link)
+        }
+    }
 
     companion object {
         private val logger = logger(ProjectViewWindow::class)

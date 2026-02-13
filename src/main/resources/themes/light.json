@@ -22,6 +22,7 @@
     "SelectedText": "#1F2328",
     "SelectedUI": "#D8E4F2",
     "Accent": "#2F7D6E",
+    "Green": "#5A9E45",
     "Success": "#3A7F5A",
     "Warning": "#B07A3B",
     "Error": "#C65454",
@@ -78,6 +79,7 @@
     "file/region_file": "icons/file/region_file.svg",
     "file/powershell": "icons/file/powershell.svg",
 
+    "ui/tritium": "icons/ui/tritium.svg",
     "ui/curseforge": "icons/ui/curseforge.svg",
     "ui/modrinth": "icons/ui/modrinth.svg",
     "ui/fabric": "icons/ui/fabric.svg",
