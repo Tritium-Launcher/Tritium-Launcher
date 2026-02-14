@@ -150,6 +150,19 @@ jobs:
           echo "app_version=$app_version" >> "$GITHUB_OUTPUT"
           echo "Resolved app version: $app_version"
 
+      - name: Resolve Qt Version
+        id: qtver
+        shell: bash
+        run: |
+          set -euo pipefail
+          qt_version="$(sed -nE 's/^qt[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' gradle/libs.versions.toml | head -n1 || true)"
+          if [[ -z "$qt_version" ]]; then
+            echo "Failed to resolve Qt version from gradle/libs.versions.toml" >&2
+            exit 1
+          fi
+          echo "value=$qt_version" >> "$GITHUB_OUTPUT"
+          echo "Resolved Qt version: $qt_version"
+
       - name: Build Shadow Jar (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
@@ -158,6 +171,128 @@ jobs:
       - name: Build Shadow Jar (Non-Windows)
         if: runner.os != 'Windows'
         run: ./gradlew --no-daemon clean shadowJar
+
+      - name: Bundle Qt Libraries (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          QT_VERSION: ${{ steps.qtver.outputs.value }}
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          python -m pip install --upgrade pip
+          python -m pip install --upgrade aqtinstall
+
+          $archOutput = python -m aqt list-qt windows desktop $env:QT_VERSION --arch
+          $archs = $archOutput -split '\s+' | Where-Object { $_ -ne '' }
+
+          if ("${{ matrix.arch }}" -eq "arm64") {
+            $qtArch = $archs | Where-Object { $_ -match 'arm64' } | Select-Object -First 1
+            $qtPlatform = "windows-arm64"
+          } else {
+            $qtArch = $archs | Where-Object { $_ -match 'msvc' -and $_ -match '64' -and $_ -notmatch 'arm64' } | Select-Object -First 1
+            if (-not $qtArch) {
+              $qtArch = $archs | Where-Object { $_ -match '64' -and $_ -notmatch 'arm64' } | Select-Object -First 1
+            }
+            $qtPlatform = "windows-x64"
+          }
+
+          if (-not $qtArch) {
+            throw "Unable to resolve Qt architecture for windows/${{ matrix.arch }}. Available: $($archs -join ', ')"
+          }
+
+          python -m aqt install-qt windows desktop $env:QT_VERSION $qtArch -m qtsvg -O "$PWD\\.qt"
+
+          $qtDir = "$PWD\\.qt\\$env:QT_VERSION\\$qtArch"
+          $qtLibDir = "$qtDir\\bin"
+          if (-not (Test-Path $qtLibDir)) {
+            throw "Qt library path not found: $qtLibDir"
+          }
+
+          $toolsDir = "$PWD\\.qtjambi-deployer"
+          New-Item -ItemType Directory -Force $toolsDir | Out-Null
+          $base = "https://repo1.maven.org/maven2/io/qtjambi"
+
+          Invoke-WebRequest "$base/qtjambi/$env:QT_VERSION/qtjambi-$env:QT_VERSION.jar" -OutFile "$toolsDir\\qtjambi-$env:QT_VERSION.jar"
+          Invoke-WebRequest "$base/qtjambi-deployer/$env:QT_VERSION/qtjambi-deployer-$env:QT_VERSION.jar" -OutFile "$toolsDir\\qtjambi-deployer-$env:QT_VERSION.jar"
+          Invoke-WebRequest "$base/qtjambi-native-$qtPlatform/$env:QT_VERSION/qtjambi-native-$qtPlatform-$env:QT_VERSION.jar" -OutFile "$toolsDir\\qtjambi-native-$qtPlatform-$env:QT_VERSION.jar"
+
+          $cp = "$toolsDir\\qtjambi-deployer-$env:QT_VERSION.jar;$toolsDir\\qtjambi-$env:QT_VERSION.jar;$toolsDir\\qtjambi-native-$qtPlatform-$env:QT_VERSION.jar"
+          java "-Djava.library.path=$qtLibDir" -cp $cp io.qt.qtjambi.deployer.Main qt "--qtdir=$qtDir" "--platform=$qtPlatform" "--target-version=$env:QT_VERSION" -d "$PWD\\build\\libs"
+
+          Get-ChildItem "$PWD\\build\\libs\\qt-lib-*.jar" | ForEach-Object { Write-Host "Bundled: $($_.Name)" }
+
+      - name: Bundle Qt Libraries (Non-Windows)
+        if: runner.os != 'Windows'
+        shell: bash
+        env:
+          QT_VERSION: ${{ steps.qtver.outputs.value }}
+        run: |
+          set -euo pipefail
+
+          python3 -m pip install --user --break-system-packages --upgrade pip aqtinstall
+          export PATH="$HOME/.local/bin:$PATH"
+
+          if [[ "${{ matrix.platform }}" == "linux" ]]; then
+            host="linux"
+            qt_platform="linux-${{ matrix.arch }}"
+            if [[ "${{ matrix.arch }}" == "x64" ]]; then
+              arch_pattern='(linux_)?gcc_64'
+            else
+              arch_pattern='(arm64|aarch64)'
+            fi
+          else
+            host="mac"
+            qt_platform="macos"
+            if [[ "${{ matrix.arch }}" == "x64" ]]; then
+              arch_pattern='clang_64'
+            else
+              arch_pattern='(clang_arm64|arm64|clang_64)'
+            fi
+          fi
+
+          if ! archs="$(aqt list-qt "$host" desktop "$QT_VERSION" --arch | tr ' \r\t' '\n' | sed '/^$/d')"; then
+            if [[ "$host" == "mac" ]]; then
+              host="macos"
+              archs="$(aqt list-qt "$host" desktop "$QT_VERSION" --arch | tr ' \r\t' '\n' | sed '/^$/d')"
+            else
+              echo "Failed to query Qt architectures for host '$host'." >&2
+              exit 1
+            fi
+          fi
+          qt_arch="$(echo "$archs" | grep -E "$arch_pattern" | head -n1 || true)"
+          if [[ -z "$qt_arch" ]]; then
+            echo "Unable to resolve Qt architecture for $host/${{ matrix.arch }}." >&2
+            echo "$archs" >&2
+            exit 1
+          fi
+
+          aqt install-qt "$host" desktop "$QT_VERSION" "$qt_arch" -m qtsvg -O "$PWD/.qt"
+
+          qt_dir="$PWD/.qt/$QT_VERSION/$qt_arch"
+          qt_lib_dir="$qt_dir/lib"
+          if [[ ! -d "$qt_lib_dir" ]]; then
+            echo "Qt library path not found: $qt_lib_dir" >&2
+            exit 1
+          fi
+
+          tools_dir="$PWD/.qtjambi-deployer"
+          mkdir -p "$tools_dir"
+          base="https://repo1.maven.org/maven2/io/qtjambi"
+
+          curl -fsSL -o "$tools_dir/qtjambi-$QT_VERSION.jar" "$base/qtjambi/$QT_VERSION/qtjambi-$QT_VERSION.jar"
+          curl -fsSL -o "$tools_dir/qtjambi-deployer-$QT_VERSION.jar" "$base/qtjambi-deployer/$QT_VERSION/qtjambi-deployer-$QT_VERSION.jar"
+          curl -fsSL -o "$tools_dir/qtjambi-native-$qt_platform-$QT_VERSION.jar" "$base/qtjambi-native-$qt_platform/$QT_VERSION/qtjambi-native-$qt_platform-$QT_VERSION.jar"
+
+          java -Djava.library.path="$qt_lib_dir" \
+            -cp "$tools_dir/qtjambi-deployer-$QT_VERSION.jar:$tools_dir/qtjambi-$QT_VERSION.jar:$tools_dir/qtjambi-native-$qt_platform-$QT_VERSION.jar" \
+            io.qt.qtjambi.deployer.Main qt \
+            --qtdir="$qt_dir" \
+            --platform="$qt_platform" \
+            --target-version="$QT_VERSION" \
+            -d "$PWD/build/libs"
+
+          ls -1 build/libs/qt-lib-*.jar
 
       - name: Prepare Dist
         shell: bash
@@ -179,6 +314,12 @@ jobs:
             --main-class "${{ env.MAIN_CLASS }}" `
             --app-version "${{ steps.version.outputs.app_version }}" `
             --dest package
+
+          New-Item -ItemType Directory -Force "package/${{ env.APP_NAME }}/licenses" | Out-Null
+          Copy-Item "LICENSE" "package/${{ env.APP_NAME }}/"
+          Copy-Item "THIRD_PARTY_NOTICES.md" "package/${{ env.APP_NAME }}/"
+          Copy-Item "third_party/licenses/*" "package/${{ env.APP_NAME }}/licenses/"
+
           Compress-Archive -Path "package/${{ env.APP_NAME }}/*" -DestinationPath "dist/tritium-${{ matrix.platform }}-${{ matrix.arch }}.zip" -Force
 
       - name: Package macOS Portable Bundle
@@ -195,6 +336,12 @@ jobs:
             --main-class "${{ env.MAIN_CLASS }}" \
             --app-version "${{ steps.version.outputs.app_version }}" \
             --dest package
+
+          mkdir -p "package/${{ env.APP_NAME }}.app/Contents/Resources/licenses"
+          cp LICENSE "package/${{ env.APP_NAME }}.app/Contents/Resources/"
+          cp THIRD_PARTY_NOTICES.md "package/${{ env.APP_NAME }}.app/Contents/Resources/"
+          cp third_party/licenses/* "package/${{ env.APP_NAME }}.app/Contents/Resources/licenses/"
+
           tar -C package -czf "dist/tritium-${{ matrix.platform }}-${{ matrix.arch }}.tar.gz" "${{ env.APP_NAME }}.app"
 
       - name: Package Linux Portable Bundles
@@ -211,6 +358,12 @@ jobs:
             --main-class "${{ env.MAIN_CLASS }}" \
             --app-version "${{ steps.version.outputs.app_version }}" \
             --dest package
+
+          mkdir -p "package/${{ env.APP_NAME }}/licenses"
+          cp LICENSE "package/${{ env.APP_NAME }}/"
+          cp THIRD_PARTY_NOTICES.md "package/${{ env.APP_NAME }}/"
+          cp third_party/licenses/* "package/${{ env.APP_NAME }}/licenses/"
+
           tar -C package -czf "dist/tritium-${{ matrix.platform }}-${{ matrix.arch }}.tar.gz" "${{ env.APP_NAME }}"
 
           if [[ "${{ matrix.arch }}" == "arm64" ]]; then
