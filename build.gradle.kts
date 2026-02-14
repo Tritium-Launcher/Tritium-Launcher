@@ -101,7 +101,7 @@ tasks.test {
 
 tasks.jar {
     manifest {
-        attributes["Main-Class"] = "io.github.footermandev.tritium.MainKt"
+        attributes["Main-Class"] = "io.github.footermandev.tritium.Main"
     }
 }
 
@@ -109,6 +109,9 @@ tasks.shadowJar {
     archiveBaseName.set("tritium")
     archiveClassifier.set("")
     archiveVersion.set("")
+    manifest {
+        attributes["Main-Class"] = "io.github.footermandev.tritium.Main"
+    }
     transform(XmlAppendingTransformer::class.java){
         resource = "META-INF/qtjambi-deployment.xml"
     }
