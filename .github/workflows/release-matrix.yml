@@ -363,6 +363,37 @@ jobs:
             --app-version "${{ steps.version.outputs.app_version }}" `
             --dest package
 
+          $cfgFile = Get-ChildItem -Path "package" -Recurse -Filter "${{ env.APP_NAME }}.cfg" | Select-Object -First 1
+          if ($cfgFile) {
+            $appDir = $cfgFile.DirectoryName
+            $qtLibJars = Get-ChildItem -Path $appDir -Filter "qt-lib-*.jar" | Sort-Object Name
+            if ($qtLibJars.Count -gt 0) {
+              $classpath = '$APPDIR/tritium.jar'
+              foreach ($jar in $qtLibJars) {
+                $classpath += ';$APPDIR/' + $jar.Name
+              }
+              $lines = Get-Content $cfgFile.FullName
+              $replaced = $false
+              $newLines = foreach ($line in $lines) {
+                if ($line -match '^app\.classpath=') {
+                  $replaced = $true
+                  "app.classpath=$classpath"
+                } else {
+                  $line
+                }
+              }
+              if (-not $replaced) {
+                $newLines += "app.classpath=$classpath"
+              }
+              Set-Content -Path $cfgFile.FullName -Value $newLines -Encoding utf8
+              Write-Host "Updated launcher classpath in $($cfgFile.FullName)"
+            } else {
+              Write-Host "No qt-lib-*.jar files found in launcher app dir: $appDir"
+            }
+          } else {
+            Write-Host "Launcher config file not found for classpath patching."
+          }
+
           New-Item -ItemType Directory -Force "package/${{ env.APP_NAME }}/licenses" | Out-Null
           Copy-Item "LICENSE" "package/${{ env.APP_NAME }}/"
           Copy-Item "THIRD_PARTY_NOTICES.md" "package/${{ env.APP_NAME }}/"
@@ -385,6 +416,25 @@ jobs:
             --app-version "${{ steps.version.outputs.mac_app_version }}" \
             --dest package
 
+          cfg_file="$(find package -type f -name "${{ env.APP_NAME }}.cfg" | head -n1 || true)"
+          if [[ -n "$cfg_file" ]]; then
+            app_dir="$(dirname "$cfg_file")"
+            mapfile -t qt_lib_jars < <(find "$app_dir" -maxdepth 1 -type f -name 'qt-lib-*.jar' -printf '%f\n' | sort)
+            if (( ${#qt_lib_jars[@]} > 0 )); then
+              classpath="\$APPDIR/tritium.jar"
+              for jar in "${qt_lib_jars[@]}"; do
+                classpath="${classpath}:\$APPDIR/${jar}"
+              done
+              awk -v cp="$classpath" 'BEGIN{r=0} /^app\.classpath=/{print "app.classpath=" cp; r=1; next} {print} END{if(!r) print "app.classpath=" cp}' "$cfg_file" > "${cfg_file}.tmp"
+              mv "${cfg_file}.tmp" "$cfg_file"
+              echo "Updated launcher classpath in $cfg_file"
+            else
+              echo "No qt-lib-*.jar files found in launcher app dir: $app_dir"
+            fi
+          else
+            echo "Launcher config file not found for classpath patching."
+          fi
+
           mkdir -p "package/${{ env.APP_NAME }}.app/Contents/Resources/licenses"
           cp LICENSE "package/${{ env.APP_NAME }}.app/Contents/Resources/"
           cp THIRD_PARTY_NOTICES.md "package/${{ env.APP_NAME }}.app/Contents/Resources/"
@@ -406,6 +456,25 @@ jobs:
             --main-class "${{ env.MAIN_CLASS }}" \
             --app-version "${{ steps.version.outputs.app_version }}" \
             --dest package
+
+          cfg_file="$(find package -type f -name "${{ env.APP_NAME }}.cfg" | head -n1 || true)"
+          if [[ -n "$cfg_file" ]]; then
+            app_dir="$(dirname "$cfg_file")"
+            mapfile -t qt_lib_jars < <(find "$app_dir" -maxdepth 1 -type f -name 'qt-lib-*.jar' -printf '%f\n' | sort)
+            if (( ${#qt_lib_jars[@]} > 0 )); then
+              classpath="\$APPDIR/tritium.jar"
+              for jar in "${qt_lib_jars[@]}"; do
+                classpath="${classpath}:\$APPDIR/${jar}"
+              done
+              awk -v cp="$classpath" 'BEGIN{r=0} /^app\.classpath=/{print "app.classpath=" cp; r=1; next} {print} END{if(!r) print "app.classpath=" cp}' "$cfg_file" > "${cfg_file}.tmp"
+              mv "${cfg_file}.tmp" "$cfg_file"
+              echo "Updated launcher classpath in $cfg_file"
+            else
+              echo "No qt-lib-*.jar files found in launcher app dir: $app_dir"
+            fi
+          else
+            echo "Launcher config file not found for classpath patching."
+          fi
 
           mkdir -p "package/${{ env.APP_NAME }}/licenses"
           cp LICENSE "package/${{ env.APP_NAME }}/"
@@ -518,4 +587,3 @@ jobs:
           generate_release_notes: true
           files: |
             release-assets/*
-            release-assets/SHA256SUMS.txt
