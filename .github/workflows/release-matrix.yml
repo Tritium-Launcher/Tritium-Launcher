@@ -146,9 +146,21 @@ jobs:
             build_number="${GITHUB_RUN_NUMBER:-0}"
           fi
 
-          app_version="${major}.${minor}.${build_number}"
+          major_num="$((10#$major))"
+          minor_num="$((10#$minor))"
+          build_num="$((10#$build_number))"
+
+          app_version="${major_num}.${minor_num}.${build_num}"
+          mac_major_num="$major_num"
+          if [[ "$mac_major_num" -eq 0 ]]; then
+            mac_major_num=1
+          fi
+          mac_app_version="${mac_major_num}.${minor_num}.${build_num}"
+
           echo "app_version=$app_version" >> "$GITHUB_OUTPUT"
+          echo "mac_app_version=$mac_app_version" >> "$GITHUB_OUTPUT"
           echo "Resolved app version: $app_version"
+          echo "Resolved macOS package version: $mac_app_version"
 
       - name: Resolve Qt Version
         id: qtver
@@ -334,7 +346,7 @@ jobs:
             --input build/libs \
             --main-jar tritium.jar \
             --main-class "${{ env.MAIN_CLASS }}" \
-            --app-version "${{ steps.version.outputs.app_version }}" \
+            --app-version "${{ steps.version.outputs.mac_app_version }}" \
             --dest package
 
           mkdir -p "package/${{ env.APP_NAME }}.app/Contents/Resources/licenses"
