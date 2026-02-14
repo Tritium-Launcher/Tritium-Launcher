@@ -196,12 +196,12 @@ jobs:
           python -m pip install --upgrade aqtinstall
 
           if ("${{ matrix.arch }}" -eq "arm64") {
-            $host = "windows_arm64"
+            $qtHost = "windows_arm64"
           } else {
-            $host = "windows"
+            $qtHost = "windows"
           }
 
-          $archOutput = python -m aqt list-qt $host desktop --arch $env:QT_VERSION
+          $archOutput = python -m aqt list-qt $qtHost desktop --arch $env:QT_VERSION
           $archs = $archOutput -split '\s+' | Where-Object { $_ -ne '' }
 
           if ("${{ matrix.arch }}" -eq "arm64") {
@@ -219,20 +219,32 @@ jobs:
             throw "Unable to resolve Qt architecture for windows/${{ matrix.arch }}. Available: $($archs -join ', ')"
           }
 
-          $modulesOutput = python -m aqt list-qt $host desktop --modules $env:QT_VERSION $qtArch
+          $modulesOutput = python -m aqt list-qt $qtHost desktop --modules $env:QT_VERSION $qtArch
           if ($modulesOutput -match '\bqtsvg\b') {
             Write-Host "Installing Qt with optional module qtsvg"
-            python -m aqt install-qt $host desktop $env:QT_VERSION $qtArch -m qtsvg -O "$PWD\\.qt"
+            python -m aqt install-qt $qtHost desktop $env:QT_VERSION $qtArch -m qtsvg -O "$PWD\\.qt"
           } else {
-            Write-Host "qtsvg module not available for $host/$qtArch on Qt $env:QT_VERSION; installing base Qt only"
-            python -m aqt install-qt $host desktop $env:QT_VERSION $qtArch -O "$PWD\\.qt"
+            Write-Host "qtsvg module not available for $qtHost/$qtArch on Qt $env:QT_VERSION; installing base Qt only"
+            python -m aqt install-qt $qtHost desktop $env:QT_VERSION $qtArch -O "$PWD\\.qt"
           }
 
-          $qtDir = "$PWD\\.qt\\$env:QT_VERSION\\$qtArch"
-          $qtLibDir = "$qtDir\\bin"
+          $qtRoot = "$PWD\\.qt\\$env:QT_VERSION"
+          $qtDir = Join-Path $qtRoot $qtArch
+          $qtLibDir = Join-Path $qtDir "bin"
           if (-not (Test-Path $qtLibDir)) {
-            throw "Qt library path not found: $qtLibDir"
+            $candidate = Get-ChildItem -Path $qtRoot -Directory -ErrorAction SilentlyContinue |
+              Where-Object { Test-Path (Join-Path $_.FullName "bin") } |
+              Select-Object -First 1
+            if ($candidate) {
+              $qtDir = $candidate.FullName
+              $qtLibDir = Join-Path $qtDir "bin"
+            }
           }
+          if (-not (Test-Path $qtLibDir)) {
+            $dirs = Get-ChildItem -Path $qtRoot -Directory -ErrorAction SilentlyContinue | Select-Object -ExpandProperty FullName
+            throw "Qt library path not found under $qtRoot (initial: $qtArch). Candidates: $($dirs -join ', ')"
+          }
+          Write-Host "Resolved Qt directory: $qtDir"
 
           $toolsDir = "$PWD\\.qtjambi-deployer"
           New-Item -ItemType Directory -Force $toolsDir | Out-Null
@@ -299,12 +311,18 @@ jobs:
             python3 -m aqt install-qt "$host" desktop "$QT_VERSION" "$qt_arch" -O "$PWD/.qt"
           fi
 
-          qt_dir="$PWD/.qt/$QT_VERSION/$qt_arch"
+          qt_root="$PWD/.qt/$QT_VERSION"
+          qt_dir="$qt_root/$qt_arch"
+          if [[ ! -d "$qt_dir/lib" ]]; then
+            qt_dir="$(find "$qt_root" -mindepth 1 -maxdepth 2 -type d | while read -r d; do [[ -d "$d/lib" ]] && { echo "$d"; break; }; done)"
+          fi
           qt_lib_dir="$qt_dir/lib"
           if [[ ! -d "$qt_lib_dir" ]]; then
-            echo "Qt library path not found: $qt_lib_dir" >&2
+            echo "Qt library path not found under: $qt_root (initial: $qt_arch)" >&2
+            find "$qt_root" -maxdepth 3 -type d | sed 's/^/  /' >&2 || true
             exit 1
           fi
+          echo "Resolved Qt directory: $qt_dir"
 
           tools_dir="$PWD/.qtjambi-deployer"
           mkdir -p "$tools_dir"
