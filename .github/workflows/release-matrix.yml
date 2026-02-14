@@ -419,12 +419,13 @@ jobs:
           cfg_file="$(find package -type f -name "${{ env.APP_NAME }}.cfg" | head -n1 || true)"
           if [[ -n "$cfg_file" ]]; then
             app_dir="$(dirname "$cfg_file")"
-            mapfile -t qt_lib_jars < <(find "$app_dir" -maxdepth 1 -type f -name 'qt-lib-*.jar' -printf '%f\n' | sort)
-            if (( ${#qt_lib_jars[@]} > 0 )); then
+            qt_lib_jars="$(find "$app_dir" -maxdepth 1 -type f -name 'qt-lib-*.jar' -exec basename {} \; | sort || true)"
+            if [[ -n "$qt_lib_jars" ]]; then
               classpath="\$APPDIR/tritium.jar"
-              for jar in "${qt_lib_jars[@]}"; do
+              while IFS= read -r jar; do
+                [[ -z "$jar" ]] && continue
                 classpath="${classpath}:\$APPDIR/${jar}"
-              done
+              done <<< "$qt_lib_jars"
               awk -v cp="$classpath" 'BEGIN{r=0} /^app\.classpath=/{print "app.classpath=" cp; r=1; next} {print} END{if(!r) print "app.classpath=" cp}' "$cfg_file" > "${cfg_file}.tmp"
               mv "${cfg_file}.tmp" "$cfg_file"
               echo "Updated launcher classpath in $cfg_file"
@@ -460,12 +461,13 @@ jobs:
           cfg_file="$(find package -type f -name "${{ env.APP_NAME }}.cfg" | head -n1 || true)"
           if [[ -n "$cfg_file" ]]; then
             app_dir="$(dirname "$cfg_file")"
-            mapfile -t qt_lib_jars < <(find "$app_dir" -maxdepth 1 -type f -name 'qt-lib-*.jar' -printf '%f\n' | sort)
-            if (( ${#qt_lib_jars[@]} > 0 )); then
+            qt_lib_jars="$(find "$app_dir" -maxdepth 1 -type f -name 'qt-lib-*.jar' -exec basename {} \; | sort || true)"
+            if [[ -n "$qt_lib_jars" ]]; then
               classpath="\$APPDIR/tritium.jar"
-              for jar in "${qt_lib_jars[@]}"; do
+              while IFS= read -r jar; do
+                [[ -z "$jar" ]] && continue
                 classpath="${classpath}:\$APPDIR/${jar}"
-              done
+              done <<< "$qt_lib_jars"
               awk -v cp="$classpath" 'BEGIN{r=0} /^app\.classpath=/{print "app.classpath=" cp; r=1; next} {print} END{if(!r) print "app.classpath=" cp}' "$cfg_file" > "${cfg_file}.tmp"
               mv "${cfg_file}.tmp" "$cfg_file"
               echo "Updated launcher classpath in $cfg_file"
