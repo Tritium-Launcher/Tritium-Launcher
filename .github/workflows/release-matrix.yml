@@ -20,7 +20,7 @@ on:
         default: false
 
 permissions:
-  contents: write
+  contents: read
 
 env:
   JAVA_VERSION: "21"
@@ -31,6 +31,8 @@ jobs:
   build:
     name: Build ${{ matrix.platform }}-${{ matrix.arch }}
     runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
     continue-on-error: ${{ matrix.experimental }}
     strategy:
       fail-fast: false
@@ -77,6 +79,9 @@ jobs:
       - name: Resolve App Version
         id: version
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DISPATCH_TAG: ${{ github.event.inputs.tag }}
         run: |
           set -euo pipefail
           raw=""
@@ -88,16 +93,62 @@ jobs:
           fi
           cleaned="$(echo "$raw" | sed -E 's/[^0-9.]+/./g; s/\.+/./g; s/^\.//; s/\.$//')"
           if [[ -z "$cleaned" ]]; then
-            cleaned="0.1.0"
+            cleaned="0.1"
           fi
-          part_count="$(awk -F'.' '{print NF}' <<< "$cleaned")"
-          if (( part_count == 1 )); then
-            cleaned="${cleaned}.0.0"
-          elif (( part_count == 2 )); then
-            cleaned="${cleaned}.0"
+
+          IFS='.' read -r -a parts <<< "$cleaned"
+          major="${parts[0]:-0}"
+          minor="${parts[1]:-0}"
+          build_from_source="${parts[2]:-}"
+
+          is_release_build=false
+          if [[ "${GITHUB_REF:-}" == refs/tags/v* ]]; then
+            is_release_build=true
           fi
-          echo "app_version=$cleaned" >> "$GITHUB_OUTPUT"
-          echo "Resolved app version: $cleaned"
+          if [[ "${GITHUB_EVENT_NAME:-}" == "workflow_dispatch" && -n "${DISPATCH_TAG:-}" ]]; then
+            is_release_build=true
+          fi
+
+          build_number=""
+          if [[ "$is_release_build" == "true" ]]; then
+            headers_file="$(mktemp)"
+            body_file="$(mktemp)"
+            release_count=""
+
+            if curl -fsSL \
+              -H "Authorization: Bearer $GH_TOKEN" \
+              -H "Accept: application/vnd.github+json" \
+              -D "$headers_file" \
+              -o "$body_file" \
+              "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases?per_page=1&page=1"; then
+              body_compact="$(tr -d '[:space:]' < "$body_file")"
+              if [[ "$body_compact" == "[]" ]]; then
+                release_count="0"
+              else
+                last_page="$(grep -i '^link:' "$headers_file" | sed -nE 's/.*[?&]page=([0-9]+)>; rel=\"last\".*/\1/p' | tail -n1)"
+                if [[ "$last_page" =~ ^[0-9]+$ ]]; then
+                  release_count="$last_page"
+                else
+                  release_count="1"
+                fi
+              fi
+            fi
+            rm -f "$headers_file" "$body_file"
+
+            if [[ "$release_count" =~ ^[0-9]+$ ]]; then
+              build_number="$((release_count + 1))"
+            else
+              build_number="${GITHUB_RUN_NUMBER:-0}"
+            fi
+          elif [[ "$build_from_source" =~ ^[0-9]+$ ]]; then
+            build_number="$build_from_source"
+          else
+            build_number="${GITHUB_RUN_NUMBER:-0}"
+          fi
+
+          app_version="${major}.${minor}.${build_number}"
+          echo "app_version=$app_version" >> "$GITHUB_OUTPUT"
+          echo "Resolved app version: $app_version"
 
       - name: Build Shadow Jar (Windows)
         if: runner.os == 'Windows'
@@ -176,22 +227,22 @@ jobs:
             mkdir -p AppDir
             cp -a "package/${{ env.APP_NAME }}/." AppDir/
 
-            cat > AppDir/AppRun <<'EOF'
-            #!/bin/sh
-            HERE="$(dirname "$(readlink -f "$0")")"
-            exec "$HERE/bin/Tritium" "$@"
-            EOF
+            printf '%s\n' \
+              '#!/bin/sh' \
+              'HERE="$(dirname "$(readlink -f "$0")")"' \
+              'exec "$HERE/bin/Tritium" "$@"' \
+              > AppDir/AppRun
             chmod +x AppDir/AppRun
 
-            cat > AppDir/Tritium.desktop <<'EOF'
-            [Desktop Entry]
-            Type=Application
-            Name=Tritium
-            Exec=Tritium
-            Icon=tritium
-            Categories=Development;
-            Terminal=false
-            EOF
+            printf '%s\n' \
+              '[Desktop Entry]' \
+              'Type=Application' \
+              'Name=Tritium' \
+              'Exec=Tritium' \
+              'Icon=tritium' \
+              'Categories=Development;' \
+              'Terminal=false' \
+              > AppDir/Tritium.desktop
 
             cp src/main/resources/icons/tritium.png AppDir/tritium.png
             ln -sf tritium.png AppDir/.DirIcon
@@ -213,6 +264,8 @@ jobs:
   release:
     name: Publish Release
     runs-on: ubuntu-24.04
+    permissions:
+      contents: write
     needs: build
     if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && github.event.inputs.tag != '')
     steps:

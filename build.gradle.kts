@@ -14,7 +14,7 @@ plugins {
 ksp { arg("verbose", "true") }
 
 group = "io.github.footermandev.tritium"
-version = "1.0-SNAPSHOT"
+version = "0.0.0"
 
 val os: OperatingSystem = OperatingSystem.current()
 val arch: String = System.getProperty("os.arch").lowercase()
