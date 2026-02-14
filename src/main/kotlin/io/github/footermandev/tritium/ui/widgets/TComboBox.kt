@@ -52,6 +52,7 @@ class TComboBox(parent: QWidget? = null) : QComboBox(parent) {
     override fun paintEvent(event: QPaintEvent?) {
         val painter = QPainter(this)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, false)
+        painter.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform, false)
 
         val w = width()
         val h = height()
@@ -62,14 +63,15 @@ class TComboBox(parent: QWidget? = null) : QComboBox(parent) {
             else -> State.Normal
         }
 
-        val dpr = try { painter.device().devicePixelRatio()
+        val dpr = try {
+            currentDpr(this)
         } catch (_: Throwable) {
-            try { currentDpr(this) } catch (_: Throwable) { 1.0 }
+            1.0
         }
         handleDprChange(dpr)
         val bg = skin.render(state.key, w, h, dpr)
         if (!bg.isNull) {
-            painter.drawPixmap(0, 0, w, h, bg)
+            painter.drawPixmap(0, 0, bg)
         }
 
         val opt = QStyleOptionComboBox()
