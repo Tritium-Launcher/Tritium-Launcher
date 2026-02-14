@@ -195,7 +195,13 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install --upgrade aqtinstall
 
-          $archOutput = python -m aqt list-qt windows desktop $env:QT_VERSION --arch
+          if ("${{ matrix.arch }}" -eq "arm64") {
+            $host = "windows_arm64"
+          } else {
+            $host = "windows"
+          }
+
+          $archOutput = python -m aqt list-qt $host desktop --arch $env:QT_VERSION
           $archs = $archOutput -split '\s+' | Where-Object { $_ -ne '' }
 
           if ("${{ matrix.arch }}" -eq "arm64") {
@@ -213,7 +219,7 @@ jobs:
             throw "Unable to resolve Qt architecture for windows/${{ matrix.arch }}. Available: $($archs -join ', ')"
           }
 
-          python -m aqt install-qt windows desktop $env:QT_VERSION $qtArch -m qtsvg -O "$PWD\\.qt"
+          python -m aqt install-qt $host desktop $env:QT_VERSION $qtArch -m qtsvg -O "$PWD\\.qt"
 
           $qtDir = "$PWD\\.qt\\$env:QT_VERSION\\$qtArch"
           $qtLibDir = "$qtDir\\bin"
@@ -243,10 +249,13 @@ jobs:
           set -euo pipefail
 
           python3 -m pip install --user --break-system-packages --upgrade pip aqtinstall
-          export PATH="$HOME/.local/bin:$PATH"
 
           if [[ "${{ matrix.platform }}" == "linux" ]]; then
-            host="linux"
+            if [[ "${{ matrix.arch }}" == "arm64" ]]; then
+              host="linux_arm64"
+            else
+              host="linux"
+            fi
             qt_platform="linux-${{ matrix.arch }}"
             if [[ "${{ matrix.arch }}" == "x64" ]]; then
               arch_pattern='(linux_)?gcc_64'
@@ -263,14 +272,9 @@ jobs:
             fi
           fi
 
-          if ! archs="$(aqt list-qt "$host" desktop "$QT_VERSION" --arch | tr ' \r\t' '\n' | sed '/^$/d')"; then
-            if [[ "$host" == "mac" ]]; then
-              host="macos"
-              archs="$(aqt list-qt "$host" desktop "$QT_VERSION" --arch | tr ' \r\t' '\n' | sed '/^$/d')"
-            else
-              echo "Failed to query Qt architectures for host '$host'." >&2
-              exit 1
-            fi
+          if ! archs="$(python3 -m aqt list-qt "$host" desktop --arch "$QT_VERSION" | tr ' \r\t' '\n' | sed '/^$/d')"; then
+            echo "Failed to query Qt architectures for host '$host'." >&2
+            exit 1
           fi
           qt_arch="$(echo "$archs" | grep -E "$arch_pattern" | head -n1 || true)"
           if [[ -z "$qt_arch" ]]; then
@@ -279,7 +283,7 @@ jobs:
             exit 1
           fi
 
-          aqt install-qt "$host" desktop "$QT_VERSION" "$qt_arch" -m qtsvg -O "$PWD/.qt"
+          python3 -m aqt install-qt "$host" desktop "$QT_VERSION" "$qt_arch" -m qtsvg -O "$PWD/.qt"
 
           qt_dir="$PWD/.qt/$QT_VERSION/$qt_arch"
           qt_lib_dir="$qt_dir/lib"
