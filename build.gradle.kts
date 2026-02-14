@@ -17,16 +17,12 @@ group = "io.github.footermandev.tritium"
 version = "1.0-SNAPSHOT"
 
 val os: OperatingSystem = OperatingSystem.current()
+val arch: String = System.getProperty("os.arch").lowercase()
+val isArm64: Boolean = arch.contains("aarch64") || arch.contains("arm64")
 val qtOs = when {
-    os.isWindows -> "windows-x64"
-    os.isMacOsX -> when {
-        System.getProperty("os.arch").lowercase().contains("aarch64") -> "macos-aarch64"
-        else -> "macos-x64"
-    }
-    os.isLinux -> when {
-        System.getProperty("os.arch").lowercase().contains("aarch64") -> "linux-aarch64"
-        else -> "linux-x64"
-    }
+    os.isWindows -> if (isArm64) "windows-arm64" else "windows-x64"
+    os.isMacOsX -> "macos"
+    os.isLinux -> if (isArm64) "linux-arm64" else "linux-x64"
     else -> "unknown"
 }
 
