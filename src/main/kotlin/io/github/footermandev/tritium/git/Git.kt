@@ -5,6 +5,8 @@ import io.github.footermandev.tritium.git.Git.findGitExecutable
 import io.github.footermandev.tritium.io.VPath
 import io.github.footermandev.tritium.logger
 import io.github.footermandev.tritium.platform.Platform
+import io.github.footermandev.tritium.settings.SettingNode
+import io.github.footermandev.tritium.settings.SettingValidation
 import io.github.footermandev.tritium.settings.SettingsMngr
 
 /**
@@ -29,11 +31,28 @@ object Git {
                 .start()
 
             val output = process.inputStream.bufferedReader().readText().trim()
-            process.waitFor()
+            val exit = process.waitFor()
 
-            if(output.isNotEmpty()) {
-                logger.info("Found Git executable: $output")
-                VPath.parse(output)
+            val candidates = output.lineSequence()
+                .map { it.trim().trim('"') }
+                .filter { it.isNotBlank() }
+                .filterNot { it.startsWith("INFO:", ignoreCase = true) }
+                .mapNotNull { line ->
+                    runCatching { VPath.parse(line).toAbsolute() }
+                        .getOrNull()
+                }
+                .toList()
+
+            val found = candidates.firstOrNull { it.exists() && it.isFile() }
+            if (found != null) {
+                logger.info("Found Git executable: {}", found)
+                return found
+            }
+
+            if (exit == 0 && candidates.isNotEmpty()) {
+                val fallback = candidates.first()
+                logger.warn("Git command resolved, but executable path could not be validated on disk: {}", fallback)
+                fallback
             } else {
                 logger.warn("Git is not installed")
                 null
@@ -94,13 +113,13 @@ object Git {
             return configured
         }
 
-        val cached = gitPath?.toAbsolute()?.takeIf { it.exists() }
+        val cached = gitPath?.toAbsolute()?.takeIf { it.exists() && it.isFile() }
         if (cached != null) {
             gitExecExists = true
             return cached
         }
 
-        val detected = findGitExecutable()?.toAbsolute()?.takeIf { it.exists() }
+        val detected = findGitExecutable()?.toAbsolute()?.takeIf { it.exists() && it.isFile() }
         if (detected == null) {
             gitExecExists = false
             gitPath = null
@@ -111,7 +130,7 @@ object Git {
         gitExecExists = true
         gitPath = detected
         if (previous != detected) {
-            maybeSuggestGitPathSetting(detected.toString())
+            maybeSetGitPathSetting(detected.toString())
         }
         return detected
     }
@@ -141,23 +160,39 @@ object Git {
     }
 
     /**
-     * Publishes a value suggestion for the git-path setting when it is present but blank.
+     * Writes a detected executable path into the git-path setting when it is blank or invalid.
      *
      * @param detectedPath Auto-detected git executable path.
-     * @see SettingsMngr.suggestValue
+     * @see SettingsMngr.updateValue
      */
-    private fun maybeSuggestGitPathSetting(detectedPath: String) {
-        val setting = SettingsMngr.findSetting(gitPathSettingKey) ?: return
+    @Suppress("UNCHECKED_CAST")
+    private fun maybeSetGitPathSetting(detectedPath: String) {
+        val setting = SettingsMngr.findSetting(gitPathSettingKey) as? SettingNode<String> ?: return
         val current = SettingsMngr.currentValueOrNull(gitPathSettingKey)
         if (current != null && current !is String) return
-        if (current is String && current.isNotBlank()) return
+        if (current is String && hasUsableConfiguredPath(current)) return
 
-        SettingsMngr.suggestValue(
-            key = gitPathSettingKey,
-            suggestedValue = detectedPath,
-            reason = "Git executable was auto-detected.",
-            source = "git:auto-detect"
-        )
-        logger.debug("Published git-path suggestion for {}", setting.key)
+        when (val validation = SettingsMngr.updateValue(setting, detectedPath)) {
+            is SettingValidation.Valid -> {
+                logger.info("Set git executable setting to auto-detected path: {}", detectedPath)
+            }
+            is SettingValidation.Invalid -> {
+                logger.warn("Failed to apply auto-detected git path to setting: {}", validation.reason)
+            }
+        }
+    }
+
+    /**
+     * Returns true when [value] points to a usable git executable file.
+     */
+    private fun hasUsableConfiguredPath(value: String): Boolean {
+        val trimmed = value.trim()
+        if (trimmed.isEmpty()) return false
+        val path = try {
+            VPath.parse(trimmed).toAbsolute()
+        } catch (_: Exception) {
+            return false
+        }
+        return path.exists() && path.isFile()
     }
 }

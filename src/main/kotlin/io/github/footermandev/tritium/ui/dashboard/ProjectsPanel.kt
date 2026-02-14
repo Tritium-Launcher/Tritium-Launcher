@@ -2,7 +2,6 @@ package io.github.footermandev.tritium.ui.dashboard
 
 import io.github.footermandev.tritium.*
 import io.github.footermandev.tritium.core.project.ProjectBase
-import io.github.footermandev.tritium.core.project.ProjectDirWatcher
 import io.github.footermandev.tritium.core.project.ProjectMngr
 import io.github.footermandev.tritium.core.project.ProjectMngrListener
 import io.github.footermandev.tritium.extension.core.BuiltinRegistries
@@ -80,7 +79,6 @@ class ProjectsPanelPrefs(private val file: VPath) {
 
 /** Dashboard project list panel with pluggable styles. */
 class ProjectsPanel internal constructor(): QWidget(), ProjectMngrListener {
-    private val watcher: ProjectDirWatcher
     private var currentProjects: List<ProjectBase> = emptyList()
     private var searchFilter: String = ""
 
@@ -91,9 +89,9 @@ class ProjectsPanel internal constructor(): QWidget(), ProjectMngrListener {
     private val styleStack = QStackedLayout().also { styleStackHost.setLayout(it) }
     private var styleControls: QWidget
 
-    private val layoutStore = LayoutStore(VPath.get("project_layouts/positions.json").toAbsolute())
-    private val groupStore = GroupStore(VPath.get("project_layouts/groups.json").toAbsolute())
-    private val prefsStore = ProjectsPanelPrefs(VPath.get("project_layouts/preferences.json").toAbsolute())
+    private val layoutStore = LayoutStore(fromTR(VPath.get("project_layouts/positions.json")).toAbsolute())
+    private val groupStore = GroupStore(fromTR(VPath.get("project_layouts/groups.json")).toAbsolute())
+    private val prefsStore = ProjectsPanelPrefs(fromTR(VPath.get("project_layouts/preferences.json")).toAbsolute())
 
     private val styleInstances = mutableMapOf<String, ProjectListStyle>()
     private val styleButtonById = mutableMapOf<String, QAbstractButton>()
@@ -128,8 +126,6 @@ class ProjectsPanel internal constructor(): QWidget(), ProjectMngrListener {
             if (refreshInFlight) refreshPending = true else refresh()
         }
 
-        watcher = ProjectDirWatcher(ProjectMngr.projectsDir)
-        watcher.start(onChange = { scheduleRefresh() })
         ProjectMngr.addListener(this)
         scheduleRefresh()
 
@@ -142,7 +138,6 @@ class ProjectsPanel internal constructor(): QWidget(), ProjectMngrListener {
 
     /** Stops watching and releases style resources. */
     fun exit() {
-        watcher.stop()
         ProjectMngr.removeListener(this)
         styleInstances.values.forEach { it.dispose() }
     }
@@ -206,6 +201,59 @@ class ProjectsPanel internal constructor(): QWidget(), ProjectMngrListener {
     /** Handles project opened events. */
     override fun onProjectOpened(project: ProjectBase) {}
 
+    /**
+     * Prompts for a `trproj.json` file and imports the owning project.
+     */
+    private fun showImportProjectDialog() {
+        val startDir = try {
+            ProjectMngr.projectsDir.toAbsolute().toString()
+        } catch (_: Throwable) {
+            fromTR().toString()
+        }
+
+        val chosen = QFileDialog.getOpenFileName(
+            this,
+            "Import Project",
+            startDir,
+            "Tritium Project (trproj.json);;JSON Files (*.json);;All Files (*)"
+        )
+        val selectedPath = chosen.result.trim()
+        if (selectedPath.isBlank()) return
+
+        importProjectFromSelection(VPath.get(selectedPath))
+    }
+
+    /**
+     * Imports a project from a selected file path, expecting `trproj.json`.
+     *
+     * If the selected file's directory does not contain `trproj.json`, import is skipped.
+     */
+    private fun importProjectFromSelection(selectedFile: VPath) {
+        val file = selectedFile.expandHome().toAbsolute().normalize()
+        val projectDir = file.parent()
+        val projectFile = if (file.fileName() == "trproj.json") file else projectDir.resolve("trproj.json")
+
+        if (!projectFile.exists()) {
+            // TODO: Add an import method for instances from other launchers
+            Dashboard.logger.warn(
+                "Import skipped for '{}' because trproj.json was not found in '{}'",
+                selectedFile,
+                projectDir
+            )
+            return
+        }
+
+        val project = try {
+            ProjectMngr.loadProject(projectDir)
+        } catch (t: Throwable) {
+            Dashboard.logger.error("Failed to import project from {}", projectDir, t)
+            null
+        } ?: return
+
+        ProjectMngr.notifyCreatedExternal(project)
+        scheduleRefresh()
+    }
+
     /** Schedules a refresh respecting debounce. */
     private fun scheduleRefresh() {
         if (ProjectMngr.generationActive) return
@@ -247,6 +295,7 @@ class ProjectsPanel internal constructor(): QWidget(), ProjectMngrListener {
 
     /** Opens a project and closes the dashboard. */
     private fun openProject(project: ProjectBase) {
+        if (project.typeId == ProjectMngr.INVALID_CATALOG_PROJECT_TYPE) return
         try { ProjectMngr.openProject(project) } catch (t: Throwable) { Dashboard.logger.error("Failed to open project: ${t.message}", t) }
         Dashboard.I?.let { try { it.close() } catch (_: Throwable) {} }
     }
@@ -263,7 +312,7 @@ class ProjectsPanel internal constructor(): QWidget(), ProjectMngrListener {
             sizePolicy = QSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
             isVisible = false
             setThemedStyle {
-                selector("searchField") {
+                selector("QLineEdit#searchField") {
                     padding(left = 40)
                     border()
                     borderRadius(8)
@@ -303,6 +352,7 @@ class ProjectsPanel internal constructor(): QWidget(), ProjectMngrListener {
             sizePolicy = QSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
             icon = QIcon(TIcons.Import)
             iconSize = qs(32, 32)
+            onClicked { showImportProjectDialog() }
         }
 
         val cloneFromGit = TPushButton {

@@ -2,6 +2,7 @@ package io.github.footermandev.tritium.ui.dashboard
 
 import io.github.footermandev.tritium.*
 import io.github.footermandev.tritium.core.project.ProjectBase
+import io.github.footermandev.tritium.core.project.ProjectMngr
 import io.github.footermandev.tritium.ui.theme.TColors
 import io.github.footermandev.tritium.ui.theme.TIcons
 import io.github.footermandev.tritium.ui.theme.qt.qtStyle
@@ -518,7 +519,7 @@ private class DvdBouncerTile(
 
     fun bind(project: ProjectBase) {
         this.project = project
-        nameLabel.text = wrapProjectName(project.name)
+        nameLabel.text = wrapProjectName(project)
         hintLabel.text = project.path.toString()
         iconLabel.pixmap = try {
             loadScaledPixmap(project.getIconPath(), iconSize, this)
@@ -542,7 +543,9 @@ private class DvdBouncerTile(
 
     override fun mouseDoubleClickEvent(event: QMouseEvent?) {
         super.mouseDoubleClickEvent(event)
-        if (event?.button() == Qt.MouseButton.LeftButton) project?.let { openProject(it) }
+        if (event?.button() == Qt.MouseButton.LeftButton) {
+            project?.takeUnless { it.isInvalidCatalogProject() }?.let { openProject(it) }
+        }
     }
 }
 
@@ -600,6 +603,7 @@ private class ListStyle(private val ctx: ProjectStyleContext) : ProjectListStyle
     init {
         list.itemDoubleClicked.connect { item ->
             val project = item?.data(Qt.ItemDataRole.UserRole) as? ProjectBase ?: return@connect
+            if (project.isInvalidCatalogProject()) return@connect
             ctx.openProject(project)
         }
         list.setItemDelegate(ListRowDelegate())
@@ -658,18 +662,23 @@ private class ListStyle(private val ctx: ProjectStyleContext) : ProjectListStyle
             }
 
             val name = project?.name ?: index.data(Qt.ItemDataRole.DisplayRole).toString()
-            val secondary = project?.path?.toString().orEmpty()
+            val isInvalid = project?.isInvalidCatalogProject() == true
+            val secondary = if (isInvalid) {
+                "Invalid project: missing trproj.json"
+            } else {
+                project?.path?.toString().orEmpty()
+            }
 
             val nameFont = QFont(opt.font)
             nameFont.setBold(true)
             p.setFont(nameFont)
-            p.setPen(opt.palette.color(QPalette.ColorRole.Text))
+            p.setPen(if (isInvalid) QColor(TColors.Warning) else opt.palette.color(QPalette.ColorRole.Text))
             p.drawText(textRect, Qt.AlignmentFlag.AlignTop.value(), name)
 
             val secondaryFont = QFont(opt.font)
             secondaryFont.setPointSize(max(8, opt.font.pointSize() - 2))
             p.setFont(secondaryFont)
-            p.setPen(opt.palette.color(QPalette.ColorRole.PlaceholderText))
+            p.setPen(if (isInvalid) QColor(TColors.Warning) else opt.palette.color(QPalette.ColorRole.PlaceholderText))
             p.drawText(textRect, Qt.AlignmentFlag.AlignBottom.value(), secondary)
             p.restore()
         }
@@ -701,7 +710,7 @@ private class ProjectTile(
         }
         layout.addWidget(iconLabel, 0, Qt.AlignmentFlag.AlignHCenter)
 
-        val title = label(wrapProjectName(project.name)) {
+        val title = label(wrapProjectName(project)) {
             setAlignment(Qt.AlignmentFlag.AlignCenter)
             wordWrap = true
             textFormat = Qt.TextFormat.RichText
@@ -739,7 +748,9 @@ private class ProjectTile(
 
     override fun mouseDoubleClickEvent(event: QMouseEvent?) {
         super.mouseDoubleClickEvent(event)
-        if (event?.button() == Qt.MouseButton.LeftButton) ctx.openProject(project)
+        if (event?.button() == Qt.MouseButton.LeftButton && !project.isInvalidCatalogProject()) {
+            ctx.openProject(project)
+        }
     }
 
     fun setSelected(value: Boolean) {
@@ -953,7 +964,7 @@ private class DraggableTile(
             pixmap = loadScaledPixmap(project.getIconPath(), iconSize, this@DraggableTile)
         }
         layout.addWidget(iconLabel, 0, Qt.AlignmentFlag.AlignHCenter)
-        val title = label(wrapProjectName(project.name)) {
+        val title = label(wrapProjectName(project)) {
             setAlignment(Qt.AlignmentFlag.AlignCenter)
             wordWrap = true
             textFormat = Qt.TextFormat.RichText
@@ -1000,7 +1011,8 @@ private class DraggableTile(
     override fun mouseDoubleClickEvent(event: QMouseEvent?) {
         super.mouseDoubleClickEvent(event)
         if (event?.button() == Qt.MouseButton.LeftButton &&
-            event.modifiers().value() != Qt.KeyboardModifier.ShiftModifier.value()) {
+            event.modifiers().value() != Qt.KeyboardModifier.ShiftModifier.value() &&
+            !project.isInvalidCatalogProject()) {
             ctx.openProject(project)
         }
     }
@@ -1046,13 +1058,26 @@ private class DraggableTile(
     }
 }
 
+private fun ProjectBase.isInvalidCatalogProject(): Boolean =
+    this.typeId == ProjectMngr.INVALID_CATALOG_PROJECT_TYPE
+
+private fun escapeHtml(input: String): String = input
+    .replace("&", "&amp;")
+    .replace("<", "&lt;")
+    .replace(">", "&gt;")
+    .replace("\"", "&quot;")
+    .replace("'", "&#39;")
+
+private fun wrapProjectName(project: ProjectBase): String {
+    val escaped = escapeHtml(project.name)
+    val invalidSuffix = if (project.isInvalidCatalogProject()) {
+        """<br/><span style="color:${TColors.Warning}; font-size:10px;">Invalid project (missing trproj.json)</span>"""
+    } else ""
+    return "<div style=\"text-align:center; word-break: break-word; overflow-wrap: anywhere;\">$escaped$invalidSuffix</div>"
+}
+
 private fun wrapProjectName(name: String): String {
-    val escaped = name
-        .replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-        .replace("\"", "&quot;")
-        .replace("'", "&#39;")
+    val escaped = escapeHtml(name)
     return "<div style=\"text-align:center; word-break: break-word; overflow-wrap: anywhere;\">$escaped</div>"
 }
 

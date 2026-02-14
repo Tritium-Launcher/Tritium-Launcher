@@ -5,8 +5,10 @@ import io.github.footermandev.tritium.bootstrap.runLowPriorityTasks
 import io.github.footermandev.tritium.bootstrap.startHost
 import io.github.footermandev.tritium.font.loadFont
 import io.github.footermandev.tritium.git.Git
+import io.github.footermandev.tritium.logging.Logs
 import io.github.footermandev.tritium.platform.Platform
 import io.github.footermandev.tritium.ui.dashboard.Dashboard
+import io.github.footermandev.tritium.ui.logging.Hotkeys
 import io.github.footermandev.tritium.ui.theme.ThemeMngr
 import io.github.footermandev.tritium.ui.theme.TritiumProxyStyle
 import io.qt.core.QCoreApplication
@@ -37,11 +39,13 @@ class Main {
 
         @JvmStatic
         fun main(vararg args: String) {
+            Logs.prepareForLaunch()
             mainLogger.info("Starting with args: ${args.joinToString(" ")}")
             Platform.printSystemDetails(mainLogger)
 
             if (QApplication.instance() == null) QApplication.initialize(args)
             appInstance = QApplication.instance() as QApplication
+            Hotkeys.install()
 
             QCoreApplication.setAttribute(Qt.ApplicationAttribute.AA_EnableHighDpiScaling, true)
             QCoreApplication.setAttribute(Qt.ApplicationAttribute.AA_UseHighDpiPixmaps, true)
@@ -53,9 +57,8 @@ class Main {
 
             ThemeMngr.init()
 
-            Git.init()
-
             val loaders = startHost(TConstants.EXT_DIR)
+            Git.init()
 
             attemptAutoSignIn()
 

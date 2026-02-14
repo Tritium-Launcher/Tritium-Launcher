@@ -348,12 +348,14 @@ object ThemeMngr {
     private fun applyStylesheets(theme: ThemeFile) {
         try {
             val fallback = defaultForType(theme.meta.type) ?: defaultTheme
-            val compiled = theme.stylesheets.values.joinToString("\n") { tpl ->
+            val baseStyles = buildBaseWidgetStylesheet(theme, fallback)
+            val compiledTheme = theme.stylesheets.values.joinToString("\n") { tpl ->
                 tpl.replace(Regex("\\$\\{([^}]+)}")) { m ->
                     val key = m.groupValues[1]
                     colorOf(theme, key) ?: fallback.colors[key] ?: defaultTheme.colors[key] ?: "#FF00FF"
                 }
             }
+            val compiled = if (compiledTheme.isBlank()) baseStyles else "$baseStyles\n$compiledTheme"
             QApplication.instance()?.styleSheet = compiled
         } catch (e: Exception) {
             logger.error("Failed to apply stylesheet for theme '{}': {}", theme.meta.id, e.message)
@@ -361,6 +363,50 @@ object ThemeMngr {
     }
 
     private fun colorOf(theme: ThemeFile, key: String): String? = theme.colors[key]
+
+    private fun resolveColorHex(theme: ThemeFile, fallback: ThemeFile, key: String, hardFallback: String): String {
+        return colorOf(theme, key)
+            ?: fallback.colors[key]
+            ?: defaultTheme.colors[key]
+            ?: hardFallback
+    }
+
+    private fun buildBaseWidgetStylesheet(theme: ThemeFile, fallback: ThemeFile): String {
+        val surface1 = resolveColorHex(theme, fallback, "Surface1", "#303030")
+        val text = resolveColorHex(theme, fallback, "Text", "#F5F5F5")
+        val subtext = resolveColorHex(theme, fallback, "Subtext", text)
+        val selectedUi = resolveColorHex(
+            theme,
+            fallback,
+            "SelectedUI",
+            resolveColorHex(theme, fallback, "Accent", "#2E436E")
+        )
+        val selectedText = resolveColorHex(theme, fallback, "SelectedText", text)
+
+        val lineEditBg = colorOf(theme, "LineEdit.Bg")
+            ?: fallback.colors["LineEdit.Bg"]
+            ?: defaultTheme.colors["LineEdit.Bg"]
+            ?: surface1
+        val lineEditFg = colorOf(theme, "LineEdit.Fg")
+            ?: fallback.colors["LineEdit.Fg"]
+            ?: defaultTheme.colors["LineEdit.Fg"]
+            ?: text
+
+        return """
+            QLineEdit,
+            QTextEdit,
+            QPlainTextEdit {
+                background-color: $lineEditBg;
+                color: $lineEditFg;
+                selection-background-color: $selectedUi;
+                selection-color: $selectedText;
+            }
+
+            QLineEdit {
+                placeholder-text-color: $subtext;
+            }
+        """.trimIndent()
+    }
 
     private fun resolveColor(theme: ThemeFile, key: String): QColor? {
         val fallback = defaultForType(theme.meta.type) ?: defaultTheme

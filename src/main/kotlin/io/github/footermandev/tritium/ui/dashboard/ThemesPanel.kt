@@ -3,6 +3,7 @@ package io.github.footermandev.tritium.ui.dashboard
 import io.github.footermandev.tritium.connect
 import io.github.footermandev.tritium.logger
 import io.github.footermandev.tritium.m
+import io.github.footermandev.tritium.platform.Platform
 import io.github.footermandev.tritium.ui.theme.TColors
 import io.github.footermandev.tritium.ui.theme.ThemeMngr
 import io.github.footermandev.tritium.ui.theme.ThemeType
@@ -11,6 +12,7 @@ import io.github.footermandev.tritium.ui.widgets.TComboBox
 import io.github.footermandev.tritium.ui.widgets.TPushButton
 import io.qt.core.QModelIndex
 import io.qt.core.QSignalBlocker
+import io.qt.core.QUrl
 import io.qt.core.Qt
 import io.qt.gui.*
 import io.qt.widgets.*
@@ -317,8 +319,19 @@ class ThemesPanel internal constructor(): QWidget() {
 
         openFolderBtn.clicked.connect {
             try {
-                ThemeMngr.userThemesDir.mkdirs()
-            } catch (_: Throwable) {}
+                val dir = ThemeMngr.userThemesDir.toAbsolute()
+                if (!dir.exists()) dir.mkdirs()
+                val localPath = dir.toString()
+                val opened = QDesktopServices.openUrl(QUrl.fromLocalFile(localPath))
+                if (!opened) {
+                    val fallbackOpened = Platform.openBrowser(dir.toJFile().toURI().toString())
+                    if (!fallbackOpened) {
+                        logger.warn("Failed to open themes folder '{}'", localPath)
+                    }
+                }
+            } catch (t: Throwable) {
+                logger.warn("Failed to open themes folder", t)
+            }
         }
 
         globalFontComboBox.currentTextChanged.connect { applyGlobalFont() }

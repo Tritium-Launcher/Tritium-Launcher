@@ -5,8 +5,10 @@
             <pattern>%d{HH:mm:ss.SSS} [%thread] %highlight(%-5level) %cyan(%logger) - %msg%n%ex</pattern>
         </encoder>
     </appender>
+    <appender name="TRITIUM_FILE" class="io.github.footermandev.tritium.logging.LogAppender" />
 
     <root level="INFO">
         <appender-ref ref="CONSOLE" />
+        <appender-ref ref="TRITIUM_FILE" />
     </root>
 </configuration>

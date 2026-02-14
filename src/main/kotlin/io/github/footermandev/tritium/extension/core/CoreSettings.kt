@@ -226,7 +226,7 @@ internal object CoreSettings {
             title = "Git Executable Path"
             description = "Optional absolute path to the git executable. Leave blank to use auto-detection."
             defaultValue = ""
-            placeholder = "/usr/bin/git"
+            placeholder = "Auto-detected from PATH"
             comments = listOf(
                 "Optional absolute path to the git executable.",
                 "Leave blank to allow Tritium to auto-detect git from PATH."
