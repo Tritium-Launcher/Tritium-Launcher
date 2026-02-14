@@ -1,0 +1,135 @@
+name: Build
+
+on:
+  push:
+    branches:
+      - main
+    tags:
+      - "v*"
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag Name"
+        required: false
+        type: string
+      prerelease:
+        description: "Mark as pre-release."
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+env:
+  JAVA_VERSION: "21"
+
+jobs:
+  build:
+    name: Build ${{ matrix.platform }}-${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    continue-on-error: ${{ matrix.experimental }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-24.04
+            platform: linux
+            arch: x64
+            experimental: false
+          - runner: ubuntu-24.04-arm
+            platform: linux
+            arch: arm64
+            experimental: false
+          - runner: windows-2025
+            platform: windows
+            arch: x64
+            experimental: false
+          - runner: windows-11-arm
+            platform: windows
+            arch: arm64
+            experimental: true
+          - runner: macos-15-intel
+            platform: macos
+            arch: x64
+            experimental: false
+          - runner: macos-15
+            platform: macos
+            arch: arm64
+            experimental: false
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set Up Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: ${{ env.JAVA_VERSION }}
+
+      - name: Set Up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Build Shadow Jar (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: .\gradlew.bat --no-daemon clean shadowJar
+
+      - name: Build Shadow Jar (Non-Windows)
+        if: runner.os != 'Windows'
+        run: ./gradlew --no-daemon clean shadowJar
+
+      - name: Prepare Artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          cp build/libs/tritium.jar "dist/tritium-${{ matrix.platform }}-${{ matrix.arch }}.jar"
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: tritium-${{ matrix.platform }}-${{ matrix.arch }}
+          path: dist/*.jar
+          if-no-files-found: error
+
+  release:
+    name: Publish Release
+    runs-on: ubuntu-24.04
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && github.event.inputs.tag != '')
+    steps:
+      - name: Download Build Artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Generate Checksums
+        run: |
+          set -euo pipefail
+          cd release-assets
+          sha256sum *.jar > SHA256SUMS.txt
+
+      - name: Resolve Release Tag
+        id: tag
+        run: |
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            echo "name=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+          else
+            echo "name=${{ github.event.inputs.tag }}" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.name }}
+          target_commitish: ${{ github.sha }}
+          name: Tritium ${{ steps.tag.outputs.name }}
+          prerelease: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.prerelease == 'true' }}
+          generate_release_notes: true
+          files: |
+            release-assets/*.jar
+            release-assets/SHA256SUMS.txt
