@@ -468,8 +468,11 @@ jobs:
     permissions:
       contents: write
     needs: build
-    if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && github.event.inputs.tag != '')
+    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
     steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
       - name: Download Build Artifacts
         uses: actions/download-artifact@v4
         with:
@@ -484,11 +487,25 @@ jobs:
 
       - name: Resolve Release Tag
         id: tag
+        shell: bash
         run: |
+          set -euo pipefail
           if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
             echo "name=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+          elif [[ -n "${{ github.event.inputs.tag }}" ]]; then
+            input_tag="${{ github.event.inputs.tag }}"
+            if [[ "$input_tag" == v* ]]; then
+              echo "name=$input_tag" >> "$GITHUB_OUTPUT"
+            else
+              echo "name=v$input_tag" >> "$GITHUB_OUTPUT"
+            fi
           else
-            echo "name=${{ github.event.inputs.tag }}" >> "$GITHUB_OUTPUT"
+            raw="$(sed -nE 's/^version[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' build.gradle.kts | head -n1 || true)"
+            cleaned="$(echo "$raw" | sed -E 's/[^0-9A-Za-z._-]+/-/g; s/^-+//; s/-+$//')"
+            if [[ -z "$cleaned" ]]; then
+              cleaned="0.0.0"
+            fi
+            echo "name=v${cleaned}-build.${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Create GitHub Release
