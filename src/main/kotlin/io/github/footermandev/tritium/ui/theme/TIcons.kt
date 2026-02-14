@@ -7,6 +7,8 @@ import io.qt.core.Qt
 import io.qt.gui.QIcon
 import io.qt.gui.QPixmap
 import io.qt.widgets.QWidget
+import java.io.File
+import java.nio.file.Files
 import java.util.concurrent.ConcurrentHashMap
 import kotlin.math.ceil
 
@@ -144,5 +146,33 @@ object TIcons {
         }
     }
 
-    internal val defaultProjectIcon = javaClass.getResource("/icons/folder.png")!!.path
+    internal val defaultProjectIcon: String by lazy {
+        resolveFileResource("/icons/folder.png")
+            ?: renderFolderIconToTempPng()
+            ?: ""
+    }
+
+    private fun resolveFileResource(path: String): String? {
+        val url = javaClass.getResource(path) ?: return null
+        return try {
+            if(url.protocol == "file") File(url.toURI()).absolutePath else null
+        } catch (_: Throwable) {
+            null
+        }
+    }
+
+    private fun renderFolderIconToTempPng(): String? {
+        return try {
+            val pix = ThemeMngr.getIcon("file/folder", 16, 16, 1.0)?.pixmap(16, 16)
+            if(pix == null || pix.isNull) {
+                null
+            } else {
+                val temp = Files.createTempFile("tritium-default-folder-", ".png").toFile()
+                temp.deleteOnExit()
+                if(pix.save(temp.absolutePath, "PNG")) temp.absolutePath else null
+            }
+        } catch (_: Throwable) {
+            null
+        }
+    }
 }

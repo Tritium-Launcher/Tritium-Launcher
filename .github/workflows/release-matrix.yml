@@ -347,7 +347,6 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist
-          cp build/libs/tritium.jar "dist/tritium-${{ matrix.platform }}-${{ matrix.arch }}.jar"
 
       - name: Package Windows Portable Bundle
         if: runner.os == 'Windows'
