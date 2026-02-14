@@ -219,7 +219,14 @@ jobs:
             throw "Unable to resolve Qt architecture for windows/${{ matrix.arch }}. Available: $($archs -join ', ')"
           }
 
-          python -m aqt install-qt $host desktop $env:QT_VERSION $qtArch -m qtsvg -O "$PWD\\.qt"
+          $modulesOutput = python -m aqt list-qt $host desktop --modules $env:QT_VERSION $qtArch
+          if ($modulesOutput -match '\bqtsvg\b') {
+            Write-Host "Installing Qt with optional module qtsvg"
+            python -m aqt install-qt $host desktop $env:QT_VERSION $qtArch -m qtsvg -O "$PWD\\.qt"
+          } else {
+            Write-Host "qtsvg module not available for $host/$qtArch on Qt $env:QT_VERSION; installing base Qt only"
+            python -m aqt install-qt $host desktop $env:QT_VERSION $qtArch -O "$PWD\\.qt"
+          }
 
           $qtDir = "$PWD\\.qt\\$env:QT_VERSION\\$qtArch"
           $qtLibDir = "$qtDir\\bin"
@@ -283,7 +290,14 @@ jobs:
             exit 1
           fi
 
-          python3 -m aqt install-qt "$host" desktop "$QT_VERSION" "$qt_arch" -m qtsvg -O "$PWD/.qt"
+          modules="$(python3 -m aqt list-qt "$host" desktop --modules "$QT_VERSION" "$qt_arch" | tr ' \r\t' '\n' | sed '/^$/d' || true)"
+          if echo "$modules" | grep -qx "qtsvg"; then
+            echo "Installing Qt with optional module qtsvg"
+            python3 -m aqt install-qt "$host" desktop "$QT_VERSION" "$qt_arch" -m qtsvg -O "$PWD/.qt"
+          else
+            echo "qtsvg module not available for $host/$qt_arch on Qt $QT_VERSION; installing base Qt only"
+            python3 -m aqt install-qt "$host" desktop "$QT_VERSION" "$qt_arch" -O "$PWD/.qt"
+          fi
 
           qt_dir="$PWD/.qt/$QT_VERSION/$qt_arch"
           qt_lib_dir="$qt_dir/lib"
