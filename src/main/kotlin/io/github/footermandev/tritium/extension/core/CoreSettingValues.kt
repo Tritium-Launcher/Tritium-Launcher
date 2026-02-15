@@ -16,6 +16,11 @@ internal object CoreSettingKeys {
     val ProjectWindowDefaultSize: NamespacedId = NamespacedId("tritium", "ui.project_window.default_size")
     val GameLaunchMaximized: NamespacedId = NamespacedId("tritium", "game.maximized")
     val GameDefaultResolution: NamespacedId = NamespacedId("tritium", "game.default_resolution")
+    val IncludePreReleaseMinecraftVersions: NamespacedId = NamespacedId("tritium", "minecraft.include_prerelease_versions")
+    val JavaPath8: NamespacedId = NamespacedId("tritium", "java.path.8")
+    val JavaPath17: NamespacedId = NamespacedId("tritium", "java.path.17")
+    val JavaPath21: NamespacedId = NamespacedId("tritium", "java.path.21")
+    val JavaPath25: NamespacedId = NamespacedId("tritium", "java.path.25")
 }
 
 /**
@@ -54,6 +59,43 @@ internal object CoreSettingValues {
     fun gameLaunchResolution(): Pair<Int, Int> =
         parseWindowSize(CoreSettingKeys.GameDefaultResolution, 1280, 720)
 
+    /**
+     * Whether Minecraft snapshot/pre-release/RC versions should be included in version lists.
+     */
+    fun includePreReleaseMinecraftVersions(): Boolean =
+        (SettingsMngr.currentValueOrNull(CoreSettingKeys.IncludePreReleaseMinecraftVersions) as? Boolean) ?: false
+
+    /**
+     * Configured Java path for Minecraft 1.16.5 and below.
+     */
+    fun javaPath8(): String? = readOptionalText(CoreSettingKeys.JavaPath8)
+
+    /**
+     * Configured Java path for Minecraft 1.17 to 1.20.
+     */
+    fun javaPath17(): String? = readOptionalText(CoreSettingKeys.JavaPath17)
+
+    /**
+     * Configured Java path for Minecraft 1.21 to 1.21.11.
+     */
+    fun javaPath21(): String? = readOptionalText(CoreSettingKeys.JavaPath21)
+
+    /**
+     * Configured Java path for Minecraft 26.*.
+     */
+    fun javaPath25(): String? = readOptionalText(CoreSettingKeys.JavaPath25)
+
+    /**
+     * Returns the configured Java path for the requested major runtime.
+     */
+    fun javaPathForMajor(major: Int): String? = when (major) {
+        8 -> javaPath8()
+        17 -> javaPath17()
+        21 -> javaPath21()
+        25 -> javaPath25()
+        else -> null
+    }
+
     private fun parseWindowSize(key: NamespacedId, fallbackWidth: Int, fallbackHeight: Int): Pair<Int, Int> {
         val raw = (SettingsMngr.currentValueOrNull(key) as? String)?.trim().orEmpty()
         if (raw.isEmpty()) return fallbackWidth to fallbackHeight
@@ -71,5 +113,10 @@ internal object CoreSettingValues {
             return fallbackWidth to fallbackHeight
         }
         return width to height
+    }
+
+    private fun readOptionalText(key: NamespacedId): String? {
+        val raw = (SettingsMngr.currentValueOrNull(key) as? String)?.trim().orEmpty()
+        return raw.takeIf { it.isNotBlank() }
     }
 }

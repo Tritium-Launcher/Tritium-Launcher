@@ -2,6 +2,7 @@ package io.github.footermandev.tritium.core.project
 
 import io.github.footermandev.tritium.*
 import io.github.footermandev.tritium.accounts.MCVersion
+import io.github.footermandev.tritium.accounts.MCVersionType
 import io.github.footermandev.tritium.accounts.MicrosoftAuth
 import io.github.footermandev.tritium.core.modloader.ModLoader
 import io.github.footermandev.tritium.core.modpack.ModSource
@@ -11,6 +12,7 @@ import io.github.footermandev.tritium.core.project.templates.generation.Generato
 import io.github.footermandev.tritium.core.project.templates.generation.license.AuthorResolver
 import io.github.footermandev.tritium.core.project.templates.generation.license.License
 import io.github.footermandev.tritium.core.project.templates.generation.license.LicenseGenerator
+import io.github.footermandev.tritium.extension.core.CoreSettingValues
 import io.github.footermandev.tritium.git.Git
 import io.github.footermandev.tritium.io.VPath
 import io.github.footermandev.tritium.koin.getRegistry
@@ -327,8 +329,14 @@ class ModpackProjectType : ProjectType {
 
         fun fetchAndPopulateMcVersions() {
             CoroutineScope(Dispatchers.IO).launch {
+                val includePreReleases = CoreSettingValues.includePreReleaseMinecraftVersions()
+                val releaseTypes = if (includePreReleases) {
+                    listOf(MCVersionType.Release, MCVersionType.Snapshot)
+                } else {
+                    listOf(MCVersionType.Release)
+                }
                 val versions: List<MCVersion> = try {
-                    MicrosoftAuth.getMinecraftVersions()
+                    MicrosoftAuth.getMinecraftVersions(releaseTypes)
                 } catch (t: Throwable) {
                     logger.info("Failed fetching Minecraft versions", t)
                     emptyList()

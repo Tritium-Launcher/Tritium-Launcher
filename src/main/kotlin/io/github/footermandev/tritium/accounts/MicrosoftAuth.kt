@@ -518,15 +518,16 @@ object MicrosoftAuth {
     /**
      * Retrieves a list of Minecraft versions.
      */
-    suspend fun getMinecraftVersions(releaseType: MCVersionType = MCVersionType.Release): List<MCVersion> {
+    suspend fun getMinecraftVersions(releaseTypes: List<MCVersionType> = listOf(MCVersionType.Release)): List<MCVersion> {
         return try {
             val response = httpClient.get("https://piston-meta.mojang.com/mc/game/version_manifest_v2.json")
             val body = response.bodyAsText()
-            authLogger.info("Successfully fetched MC version manifest.")
 
             val manifest: VersionManifest = json.decodeFromString(body)
 
-            val releases = manifest.versions.filter { it.type == releaseType }
+            val typesSet = releaseTypes.toSet()
+            val releases = manifest.versions.filter { it.type in typesSet }
+            authLogger.info("Successfully fetched MC version manifest.")
             authLogger.info("Filtered ${releases.size} release versions from the MC version manifest.")
             releases
         } catch (e: Exception) {

@@ -120,9 +120,15 @@ object GameLauncher {
             return
         }
 
-        val javaExec = findJava21()
+        val requiredJavaMajor = Minecraft.requiredJavaMajor(mcVersion)
+        val javaExec = resolveJavaExecutableForMinecraft(mcVersion)
         if (javaExec == null) {
-            logger.warn("Cannot launch; Java 21 not found on PATH or JAVA_HOME")
+            logger.warn(
+                "Cannot launch; no Java {} runtime available for Minecraft {}. Configure java.path.{} in Settings.",
+                requiredJavaMajor,
+                mcVersion,
+                requiredJavaMajor
+            )
             return
         }
 
@@ -197,12 +203,28 @@ object GameLauncher {
     }
 
     /**
-     * TODO: This is currently hardcoded to Java 21 versions of MC, it will not be forever when Settings are implemented.
+     * Resolves the Java executable for a Minecraft version.
+     *
+     * Resolution order:
+     * 1. Java path configured in Settings for the required runtime
+     * 2. Auto-detected installed runtime matching the required major
      */
-    private fun findJava21(): VPath? {
-        val candidates = Java.locateJavaExecutablesWithVersion()
-        val match = candidates.firstOrNull { (ver, _) -> ver.startsWith("21") }
-        return match?.second?.let { VPath.parse(it) }
+    private fun resolveJavaExecutableForMinecraft(mcVersion: String): VPath? {
+        val requiredMajor = Minecraft.requiredJavaMajor(mcVersion)
+        val configured = CoreSettingValues.javaPathForMajor(requiredMajor)
+        val configuredExec = Java.resolveJavaExecutable(configured)
+        if (configuredExec != null) {
+            return configuredExec
+        }
+        if (!configured.isNullOrBlank()) {
+            logger.warn("Configured java.path.{} is invalid: {}", requiredMajor, configured)
+        }
+
+        val detected = Java.findDetectedExecutableForMajor(requiredMajor)
+        if (detected != null) {
+            return detected
+        }
+        return null
     }
 
     /**

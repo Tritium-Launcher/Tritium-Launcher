@@ -34,6 +34,7 @@ sealed interface SettingValidation {
  * @property defaultValue Default value used when no persisted value exists.
  * @property serializer Serializer used for persistence.
  * @property comments Comments to render above this setting on disk.
+ * @property order Relative display order within a category.
  * @property persistValue Whether the setting value should be persisted.
  * @see SettingNode
  * @see SettingsMngr.registerSetting
@@ -45,10 +46,12 @@ sealed class SettingDescriptor<T>(
     val defaultValue: T,
     val serializer: KSerializer<T>,
     val comments: List<String> = emptyList(),
+    val order: Int = -1,
     val persistValue: Boolean = true
 ) {
     init {
         require(LOCAL_ID.matches(id)) { "Setting id must match ${LOCAL_ID.pattern} (got '$id')" }
+        require(order >= -1) { "Setting order must be >= -1 (got $order)" }
     }
 
     /**
@@ -68,8 +71,9 @@ class ToggleSettingDescriptor(
     title: String,
     description: String? = null,
     defaultValue: Boolean = false,
-    comments: List<String> = emptyList()
-) : SettingDescriptor<Boolean>(id, title, description, defaultValue, Boolean.serializer(), comments)
+    comments: List<String> = emptyList(),
+    order: Int = -1
+) : SettingDescriptor<Boolean>(id, title, description, defaultValue, Boolean.serializer(), comments, order)
 
 /**
  * Free-form text setting descriptor with optional disallowed regex patterns.
@@ -84,8 +88,9 @@ class TextSettingDescriptor(
     defaultValue: String = "",
     val disallowed: List<Regex> = emptyList(),
     val placeholder: String? = null,
-    comments: List<String> = emptyList()
-) : SettingDescriptor<String>(id, title, description, defaultValue, String.serializer(), comments) {
+    comments: List<String> = emptyList(),
+    order: Int = -1
+) : SettingDescriptor<String>(id, title, description, defaultValue, String.serializer(), comments, order) {
     /**
      * Validates that [value] does not match any [disallowed] pattern.
      *
@@ -104,7 +109,8 @@ class TextSettingDescriptor(
  */
 class CommentSettingDescriptor(
     id: String,
-    text: String
+    text: String,
+    order: Int = -1
 ) : SettingDescriptor<Unit>(
     id = id,
     title = text,
@@ -112,6 +118,7 @@ class CommentSettingDescriptor(
     defaultValue = Unit,
     serializer = Unit.serializer(),
     comments = text.trim().lines(),
+    order = order,
     persistValue = false
 )
 
@@ -170,7 +177,8 @@ class WidgetSettingDescriptor<T>(
     defaultValue: T,
     serializer: KSerializer<T>?,
     val widgetFactory: SettingWidgetFactory<T>,
-    comments: List<String> = emptyList()
+    comments: List<String> = emptyList(),
+    order: Int = -1
 ) : SettingDescriptor<T>(
     id = id,
     title = title,
@@ -178,5 +186,6 @@ class WidgetSettingDescriptor<T>(
     defaultValue = defaultValue,
     serializer = serializer ?: @Suppress("UNCHECKED_CAST") (Unit.serializer() as KSerializer<T>),
     comments = comments,
+    order = order,
     persistValue = serializer != null
 )

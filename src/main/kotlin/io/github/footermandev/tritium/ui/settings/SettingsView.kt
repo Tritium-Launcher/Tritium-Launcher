@@ -52,14 +52,14 @@ class SettingsView : QWidget() {
         widgetResizable = true
         frameShape = QFrame.Shape.NoFrame
     }
-    private val cancelBtn = TPushButton().apply {
+    private val cancelBtn = TPushButton {
         text = "Cancel"
-        minimumHeight = 24
+        minimumHeight = 30
         isEnabled = false
     }
-    private val applyBtn = TPushButton().apply {
+    private val applyBtn = TPushButton {
         text = "Apply"
-        minimumHeight = 24
+        minimumHeight = 30
         isEnabled = false
     }
 
@@ -634,9 +634,9 @@ class SettingsView : QWidget() {
             toolTip = descriptor.description.orEmpty()
         }
         val toggle = TToggleSwitch()
-        val resetBtn = TPushButton().apply {
+        val resetBtn = TPushButton {
             text = "Reset"
-            minimumHeight = 22
+            minimumHeight = 25
         }
 
         topLayout.addWidget(title, 1)
@@ -721,9 +721,9 @@ class SettingsView : QWidget() {
             objectName = "settingsInput"
             placeholderText = descriptor.placeholder.orEmpty()
         }
-        val resetBtn = TPushButton().apply {
+        val resetBtn = TPushButton {
             text = "Reset"
-            minimumHeight = 22
+            minimumHeight = 25
         }
 
         topLayout.addWidget(title, 1)
@@ -824,9 +824,9 @@ class SettingsView : QWidget() {
             objectName = "settingTitle"
             toolTip = descriptor.description.orEmpty()
         }
-        val resetBtn = TPushButton().apply {
+        val resetBtn = TPushButton {
             text = "Reset"
-            minimumHeight = 22
+            minimumHeight = 25
         }
 
         val widget = createWidget(descriptor, node)

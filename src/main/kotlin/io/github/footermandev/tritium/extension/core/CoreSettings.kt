@@ -136,32 +136,26 @@ private class WindowSizeWidget(
  */
 internal object CoreSettings {
     val registration = settingsDefinition {
-        val general = category("general") {
-            title = "General"
-            description = "Common launcher preferences."
-            allowForeignSettings = true
-            allowForeignSubcategories = true
-        }
 
         val versionControl = category("version_control") {
             title = "Version Control"
-            description = "Git executable and related integration settings."
-            parent = general
             allowForeignSettings = true
             allowForeignSubcategories = true
         }
 
         val ui = category("ui") {
             title = "Appearance & UI"
-            description = "Themes, fonts, layout tweaks."
-            parent = general
             allowForeignSettings = true
         }
 
         val projects = category("projects") {
-            title = "Projects & Windows"
-            description = "Project open behavior and default window sizing."
-            parent = general
+            title = "Projects"
+            allowForeignSettings = true
+        }
+
+        val javaRuntime = category("java_runtime") {
+            title = "Java Runtime"
+            parent = projects
             allowForeignSettings = true
         }
 
@@ -170,57 +164,102 @@ internal object CoreSettings {
             description = "Automatically close the dashboard after opening a project window."
             defaultValue = true
             comments = listOf(
-                "When true, opening a project window closes the dashboard window.",
-                "Set to false if you prefer keeping the dashboard open."
+                "When true, opening a project window closes the dashboard window."
             )
         }
 
-        widget<String>(ui.path, "ui.dashboard.window_size") {
+        toggle(projects.path, "minecraft.include_prerelease_versions") {
+            title = "Include Pre-release MC Versions"
+            description = "Include snapshot, pre-release, and release-candidate Minecraft versions in selectors."
+            defaultValue = false
+            comments = listOf(
+                "When enabled, Minecraft version lists include pre-release versions."
+            )
+        }
+
+        widget(ui.path, "ui.dashboard.window_size") {
             title = "Dashboard Window Size"
             description = "Fixed dashboard window size represented as WIDTH x HEIGHT."
             defaultValue = "650x400"
             serializer = String.serializer()
             comments = listOf(
-                "Dashboard size in WIDTHxHEIGHT format.",
-                "Example: 650x400"
+                "Dashboard size in WIDTHxHEIGHT format."
             )
             widgetFactory = { ctx -> WindowSizeWidget(ctx, "650x400") }
         }
 
-        widget<String>(projects.path, "ui.project_window.default_size") {
+        widget(projects.path, "ui.project_window.default_size") {
             title = "Project Window Default Size"
-            description = "Default project window size used when no saved UI geometry exists."
+            description = "Default project window size used when saved values are broken."
             defaultValue = "1280x720"
             serializer = String.serializer()
             comments = listOf(
-                "Default project window size in WIDTHxHEIGHT format.",
-                "Used only when no saved geometry is available."
+                "Default project window size in WIDTHxHEIGHT format."
             )
             widgetFactory = { ctx -> WindowSizeWidget(ctx, "1280x720") }
         }
 
         val gameMaximized = toggle(projects.path, "game.maximized") {
             title = "Game Launch Maximized"
-            description = "Launches the game window maximized instead of using an explicit resolution."
+            description = "Launches the game window maximized."
             defaultValue = false
-            comments = listOf(
-                "When enabled, game launch arguments should prefer maximized window behavior.",
-                "Resolution fields are disabled while maximized is enabled."
-            )
         }
 
-        val gameResolution = widget<String>(projects.path, "game.default_resolution") {
+        val gameResolution = widget(projects.path, "game.default_resolution") {
             title = "Game Launch Resolution"
-            description = "Launch resolution represented as WIDTH x HEIGHT used for token replacement."
+            description = "Game resolution represented as WIDTH x HEIGHT when launched."
             defaultValue = "1280x720"
             serializer = String.serializer()
             comments = listOf(
-                "Default Minecraft launch resolution in WIDTHxHEIGHT format.",
-                "Used when replacing resolution tokens in launch arguments."
+                "Default Minecraft launch resolution in WIDTHxHEIGHT format."
             )
             widgetFactory = { ctx -> WindowSizeWidget(ctx, "1280x720") }
         }
         gameMaximized.addChild(gameResolution) { maximized -> !maximized }
+
+        widget(javaRuntime.path, "java.path.8") {
+            title = "Java 8 Path"
+            description = "Java runtime for Minecraft 1.16.5 and below."
+            defaultValue = ""
+            serializer = String.serializer()
+            comments = listOf(
+                "Java executable path (or JAVA_HOME) for MC 1.16.5 and below."
+            )
+            widgetFactory = { ctx -> JavaPathSettingWidget(ctx, 8) }
+        }
+
+        widget(javaRuntime.path, "java.path.17") {
+            title = "Java 17 Path"
+            description = "Java runtime for Minecraft 1.17 to 1.20."
+            defaultValue = ""
+            serializer = String.serializer()
+            comments = listOf(
+                "Java executable path (or JAVA_HOME) for MC 1.17 through 1.20."
+            )
+            widgetFactory = { ctx -> JavaPathSettingWidget(ctx, 17) }
+        }
+
+        widget(javaRuntime.path, "java.path.21") {
+            title = "Java 21 Path"
+            description = "Java runtime for Minecraft 1.21 to 1.21.11."
+            defaultValue = ""
+            serializer = String.serializer()
+            comments = listOf(
+                "Java executable path (or JAVA_HOME) for MC 1.21 through 1.21.11."
+            )
+            widgetFactory = { ctx -> JavaPathSettingWidget(ctx, 21) }
+        }
+
+        widget(javaRuntime.path, "java.path.25") {
+            title = "Java 25 Path"
+            description = "Java runtime for Minecraft 26.1."
+            defaultValue = ""
+            serializer = String.serializer()
+            comments = listOf(
+                "Java executable path (or JAVA_HOME) for MC 26.*."
+            )
+            widgetFactory = { ctx -> JavaPathSettingWidget(ctx, 25) }
+        }
 
         text(versionControl.path, "git.path") {
             title = "Git Executable Path"

@@ -889,6 +889,7 @@ class ToggleBuilder(private val id: String) {
     var description: String? = null
     var defaultValue: Boolean = false
     var comments: List<String> = emptyList()
+    var order: Int = -1
 
     /**
      * Builds an immutable [ToggleSettingDescriptor].
@@ -896,7 +897,7 @@ class ToggleBuilder(private val id: String) {
      * @return Built toggle descriptor.
      */
     fun build(): ToggleSettingDescriptor =
-        ToggleSettingDescriptor(id, title, description, defaultValue, comments)
+        ToggleSettingDescriptor(id, title, description, defaultValue, comments, order)
 }
 
 /**
@@ -912,6 +913,7 @@ class TextBuilder(private val id: String) {
     var defaultValue: String = ""
     var placeholder: String? = null
     var comments: List<String> = emptyList()
+    var order: Int = -1
     private val disallowPatterns = mutableListOf<Regex>()
 
     /**
@@ -936,7 +938,8 @@ class TextBuilder(private val id: String) {
             defaultValue = defaultValue,
             disallowed = disallowPatterns.toList(),
             placeholder = placeholder,
-            comments = comments
+            comments = comments,
+            order = order
         )
 }
 
@@ -949,13 +952,14 @@ class TextBuilder(private val id: String) {
 @SettingsDsl
 class CommentBuilder(private val id: String) {
     var text: String = id
+    var order: Int = -1
 
     /**
      * Builds an immutable [CommentSettingDescriptor].
      *
      * @return Built comment descriptor.
      */
-    fun build(): CommentSettingDescriptor = CommentSettingDescriptor(id, text)
+    fun build(): CommentSettingDescriptor = CommentSettingDescriptor(id, text, order)
 }
 
 /**
@@ -971,6 +975,7 @@ class WidgetBuilder<T>(private val id: String) {
     var defaultValue: T? = null
     var serializer: KSerializer<T>? = null
     var comments: List<String> = emptyList()
+    var order: Int = -1
     lateinit var widgetFactory: SettingWidgetFactory<T>
 
     /**
@@ -989,7 +994,8 @@ class WidgetBuilder<T>(private val id: String) {
             defaultValue = default,
             serializer = serializer,
             widgetFactory = factory,
-            comments = comments
+            comments = comments,
+            order = order
         )
     }
 }

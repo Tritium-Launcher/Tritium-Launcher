@@ -3,6 +3,7 @@ package io.github.footermandev.tritium.settings
 import io.github.footermandev.tritium.extension.Extension
 import org.slf4j.LoggerFactory
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * In-memory registry for categories and settings.
@@ -61,6 +62,7 @@ class SettingsRegistry {
     private val rootCategories = mutableListOf<CategoryNode>()
     private val categoriesByPath = mutableMapOf<CategoryPath, CategoryNode>()
     private val settingsByOwner = ConcurrentHashMap<String, MutableMap<String, SettingNode<*>>>()
+    private val nextSettingRegistrationIndex = AtomicLong(0)
 
     /**
      * Registers a category under [ownerNamespace].
@@ -150,7 +152,8 @@ class SettingsRegistry {
             key = NamespacedId(ownerNs, descriptor.id),
             categoryPath = category,
             descriptor = descriptor,
-            ownerNamespace = ownerNs
+            ownerNamespace = ownerNs,
+            registrationIndex = nextSettingRegistrationIndex.getAndIncrement()
         )
 
         perOwner[descriptor.id] = node
@@ -237,10 +240,16 @@ class SettingsRegistry {
             .thenBy { it.key.id })
 
     /**
-     * Sorts settings by namespace, title, then id for stable rendering order.
+     * Sorts settings using explicit order first, then declaration order.
+     *
+     * Rules:
+     * - `order >= 0`: Sorted ascending and shown before declaration-ordered settings.
+     * - `order == -1`: Sorted by [SettingNode.registrationIndex].
      */
     private fun sortSettings(settings: Collection<SettingNode<*>>): List<SettingNode<*>> =
-        settings.sortedWith(compareBy<SettingNode<*>> { it.ownerNamespace }
-            .thenBy { it.descriptor.title.lowercase() }
+        settings.sortedWith(compareBy<SettingNode<*>> { it.descriptor.order < 0 }
+            .thenBy { if (it.descriptor.order >= 0) it.descriptor.order else Int.MAX_VALUE }
+            .thenBy { it.registrationIndex }
+            .thenBy { it.ownerNamespace }
             .thenBy { it.key.id })
 }

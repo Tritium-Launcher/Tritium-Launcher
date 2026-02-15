@@ -20,6 +20,7 @@ data class SettingChildLink(
  * @property categoryPath Category containing this setting.
  * @property descriptor Definition metadata and serializer for this setting.
  * @property ownerNamespace Namespace that registered this setting.
+ * @property registrationIndex Index assigned at registration for sorting.
  * @see SettingsRegistry.registerSetting
  * @see SettingsMngr.registerSetting
  */
@@ -28,6 +29,7 @@ data class SettingNode<T>(
     val categoryPath: CategoryPath,
     val descriptor: SettingDescriptor<T>,
     val ownerNamespace: String = key.namespace,
+    val registrationIndex: Long = -1,
     private val childrenList: MutableList<SettingChildLink> = mutableListOf()
 ) {
     /**

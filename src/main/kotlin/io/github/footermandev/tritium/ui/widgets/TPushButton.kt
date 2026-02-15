@@ -24,6 +24,17 @@ class TPushButton(
     parent: QWidget? = null
 ) : QPushButton(parent) {
     private var lastDpr: Double = -1.0
+    /**
+     * Additional Y offset applied to the button label.
+     *
+     * Positive values move up, Negative values move down.
+     */
+    var textVerticalOffset: Int = 0
+        set(value) {
+            if (field == value) return
+            field = value
+            update()
+        }
 
     init {
         toggled.connect { checked ->
@@ -31,6 +42,7 @@ class TPushButton(
                 isDown = checked
             }
         }
+        minimumHeight = 20
     }
 
     override fun paintEvent(event: QPaintEvent?) {
@@ -66,11 +78,8 @@ class TPushButton(
         initStyleOption(opt)
 
         val r = opt.rect
-        if(isDown || isChecked) {
-            r.translate(0, 1)
-        } else {
-            r.translate(0, -1)
-        }
+        val stateOffset = if (isDown || isChecked) 1 else -1
+        r.translate(0, stateOffset + textVerticalOffset)
         opt.rect = r
 
         painter.save()

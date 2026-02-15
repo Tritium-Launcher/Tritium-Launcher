@@ -1,6 +1,5 @@
 package io.github.footermandev.tritium.platform
 
-import io.github.footermandev.tritium.TConstants
 import io.github.footermandev.tritium.mainLogger
 import io.github.footermandev.tritium.toURI
 import kotlinx.io.IOException
@@ -30,22 +29,6 @@ enum class Platform {
         val isWindows = current == Windows
         val isMacOS   = current == MacOSX
         val isLinux   = current == Linux
-
-        val sysSettingsDir: File by lazy {
-            when(current) {
-                Windows -> File(System.getenv("APPDATA") ?: "$userHome\\AppData\\Roaming")
-
-                MacOSX -> File("$userHome/Library/Application Support")
-
-                else -> File("$userHome/.config")
-            }
-        }
-
-        fun getSettingsDir(): File {
-            val dir = File(sysSettingsDir, TConstants.TR)
-            if (!dir.exists()) dir.mkdirs()
-            return dir
-        }
 
         fun openBrowser(url: String): Boolean {
             try {
