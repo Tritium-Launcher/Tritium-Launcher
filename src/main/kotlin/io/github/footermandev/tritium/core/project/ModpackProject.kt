@@ -22,6 +22,8 @@ import io.github.footermandev.tritium.ui.theme.TIcons
 import io.github.footermandev.tritium.ui.theme.qt.setStyle
 import io.github.footermandev.tritium.ui.theme.setInvalid
 import io.github.footermandev.tritium.ui.widgets.*
+import io.github.footermandev.tritium.ui.widgets.constructor_functions.hBoxLayout
+import io.github.footermandev.tritium.ui.widgets.constructor_functions.label
 import io.qt.core.Qt
 import io.qt.gui.QIcon
 import io.qt.gui.QPixmap
@@ -59,7 +61,7 @@ class ModpackProjectType : ProjectType {
         }
 
         // MARK: Set the project Name
-        val nameLabel = QLabel("Name:")
+        val nameLabel = label("Name:")
         val nameField = QLineEdit().apply {
             text = initialVars.getOrDefault("packName", "")
             textChanged.connect { initialVars["packName"] = this.text }
@@ -78,7 +80,7 @@ class ModpackProjectType : ProjectType {
         form.addRow(nameLabel, nameField)
 
         // MARK: Set the project location
-        val pathLabel = QLabel("Location:")
+        val pathLabel = label("Location:")
         val pathField = InfoLineEditWidget().apply {
             val slash = if(Platform.isWindows) "\\" else "/"
             text = initialVars.getOrDefault("packPath", "~${slash}tritium${slash}${TConstants.Dirs.PROJECTS}")
@@ -100,7 +102,7 @@ class ModpackProjectType : ProjectType {
 
         // MARK: Set the project Icon
         val iconPreview = QLabel()
-        val iconLabel = QLabel("Icon:")
+        val iconLabel = label("Icon:")
 
         val iconPathField = QLineEdit().apply {
             text = initialVars.getOrDefault("iconPath", "")
@@ -147,7 +149,7 @@ class ModpackProjectType : ProjectType {
         }
 
         val iconRow = QWidget()
-        val iconRowLayout = QHBoxLayout(iconRow).apply {
+        val iconRowLayout = hBoxLayout(iconRow) {
             contentsMargins = 0.m
             setSpacing(8)
             addWidget(iconPathField)
@@ -159,32 +161,32 @@ class ModpackProjectType : ProjectType {
         form.addRow(iconLabel, iconRow)
 
         // MARK: Set the Minecraft Version
-        val mcLabel = QLabel("Minecraft Version:")
-        val mcCombo = TComboBox().apply {
+        val mcLabel = label("Minecraft Version:")
+        val mcCombo = TComboBox {
             sizeAdjustPolicy = QComboBox.SizeAdjustPolicy.AdjustToContents
             minimumWidth = 50
         }
         form.addRow(mcLabel, mcCombo)
 
         // MARK: Set the Mod Loader
-        val modLoaderLabel = QLabel("Mod Loader:")
-        val modLoaderCombo = TComboBox().apply {
+        val modLoaderLabel = label("Mod Loader:")
+        val modLoaderCombo = TComboBox {
             sizeAdjustPolicy = QComboBox.SizeAdjustPolicy.AdjustToContents
             minimumWidth = 50
         }
         form.addRow(modLoaderLabel, modLoaderCombo)
 
         // MARK: Set the Mod Loader Version
-        val modLoaderVerLabel = QLabel("Mod Loader Version:")
-        val modLoaderVerCombo = TComboBox().apply {
+        val modLoaderVerLabel = label("Mod Loader Version:")
+        val modLoaderVerCombo = TComboBox {
             sizeAdjustPolicy = QComboBox.SizeAdjustPolicy.AdjustToContents
             minimumWidth = 50
         }
         form.addRow(modLoaderVerLabel, modLoaderVerCombo)
 
         // MARK: Set the Mod Source
-        val sourceLabel = QLabel("Mod Source:")
-        val sourceCombo = TComboBox().apply {
+        val sourceLabel = label("Mod Source:")
+        val sourceCombo = TComboBox {
             sizeAdjustPolicy = QComboBox.SizeAdjustPolicy.AdjustToContents
             minimumWidth = 50
         }
@@ -199,7 +201,7 @@ class ModpackProjectType : ProjectType {
         form.addRow(separatorLabel)
 
         // MARK: Set if Git Repository should be initialized
-        val gitLabel = QLabel("Create Git Repository:")
+        val gitLabel = label("Create Git Repository:")
         val gitCheckbox = QCheckBox().apply {
             isCheckable = Git.gitExecExists
             isChecked = initialVars.getOrDefault("initGit", "false") == "true"
@@ -212,22 +214,22 @@ class ModpackProjectType : ProjectType {
         form.addRow(gitLabel, gitCheckbox)
 
         // MARK: Set License
-        val licenseLabel = QLabel("License:")
-        val licenseCombo = TComboBox().apply {
+        val licenseLabel = label("License:")
+        val licenseCombo = TComboBox {
             sizeAdjustPolicy = QComboBox.SizeAdjustPolicy.AdjustToContents
             minimumWidth = 50
         }
         form.addRow(licenseLabel, licenseCombo)
 
-        val licenseAuthorLabel = QLabel("License Author:").apply { visible = false }
+        val licenseAuthorLabel = label("License Author:") { visible = false }
         val licenseAuthorField = QLineEdit().apply {
             visible = false
             textChanged.connect { initialVars["licenseAuthor"] = text }
         }
-        val licenseAuthorSource = QLabel().apply { visible = false }
+        val licenseAuthorSource = label() { visible = false }
 
         val licenseAuthorRow = QWidget()
-        val licenseAuthorRowLayout = QHBoxLayout(licenseAuthorRow).apply {
+        val licenseAuthorRowLayout = hBoxLayout(licenseAuthorRow) {
             contentsMargins = 0.m
             setSpacing(8)
             addWidget(licenseAuthorField)

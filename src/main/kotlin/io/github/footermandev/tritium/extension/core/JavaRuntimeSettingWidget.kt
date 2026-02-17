@@ -123,7 +123,7 @@ private class JavaRuntimeAutoDetectDialog(
             selectCurrentRow()
         }
 
-        vBoxLayout(this).apply {
+        vBoxLayout(this) {
             contentsMargins = 10.m
             widgetSpacing = 8
             addWidget(hintLabel)

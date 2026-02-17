@@ -11,6 +11,7 @@ import io.github.footermandev.tritium.ui.dashboard.Dashboard.Companion.bgDashboa
 import io.github.footermandev.tritium.ui.theme.TColors
 import io.github.footermandev.tritium.ui.theme.TIcons
 import io.github.footermandev.tritium.ui.theme.qt.setThemedStyle
+import io.github.footermandev.tritium.ui.widgets.TComboBox
 import io.github.footermandev.tritium.ui.widgets.TPushButton
 import io.github.footermandev.tritium.ui.widgets.constructor_functions.hBoxLayout
 import io.github.footermandev.tritium.ui.widgets.constructor_functions.label
@@ -83,8 +84,8 @@ class ProjectsPanel internal constructor(): QWidget(), ProjectMngrListener {
     private var searchFilter: String = ""
 
     private val styleButtons = QButtonGroup(this)
-    private val styleButtonRow = QHBoxLayout()
-    private val sortCombo = QComboBox()
+    private val styleButtonRow = hBoxLayout()
+    private val sortCombo = TComboBox()
     private val styleStackHost = qWidget()
     private val styleStack = QStackedLayout().also { styleStackHost.setLayout(it) }
     private var styleControls: QWidget
@@ -217,7 +218,7 @@ class ProjectsPanel internal constructor(): QWidget(), ProjectMngrListener {
             startDir,
             "Tritium Project (trproj.json);;JSON Files (*.json);;All Files (*)"
         )
-        val selectedPath = chosen.result.trim()
+        val selectedPath = chosen?.result?.trim().orEmpty()
         if (selectedPath.isBlank()) return
 
         importProjectFromSelection(VPath.get(selectedPath))

@@ -2,6 +2,7 @@ package io.github.footermandev.tritium.ui.widgets
 
 import io.github.footermandev.tritium.connect
 import io.github.footermandev.tritium.ui.theme.qt.setStyle
+import io.github.footermandev.tritium.ui.widgets.constructor_functions.label
 import io.qt.Nullable
 import io.qt.core.QPoint
 import io.qt.core.Qt
@@ -37,7 +38,7 @@ class InfoLineEditWidget(
 
     private fun ensurePopup(): QLabel {
         if(popup == null) {
-            popup = QLabel().apply {
+            popup = label {
                 setWindowFlag(Qt.WindowType.ToolTip)
                 setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating, true)
                 setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, true)

@@ -11,6 +11,9 @@ import io.github.footermandev.tritium.ui.dashboard.Dashboard
 import io.github.footermandev.tritium.ui.theme.TColors
 import io.github.footermandev.tritium.ui.theme.qt.setThemedStyle
 import io.github.footermandev.tritium.ui.widgets.TPushButton
+import io.github.footermandev.tritium.ui.widgets.constructor_functions.hBoxLayout
+import io.github.footermandev.tritium.ui.widgets.constructor_functions.vBoxLayout
+import io.github.footermandev.tritium.ui.widgets.constructor_functions.widget
 import io.qt.core.QSize
 import io.qt.core.QTimer
 import io.qt.core.Qt
@@ -42,14 +45,14 @@ class NewProjectDialog internal constructor(parent: QWidget? = null): QDialog(pa
         minimumHeight = 520
         objectName = "ProjectDialog"
 
-        val mainLayout = QHBoxLayout(this).apply {
+        val mainLayout = hBoxLayout(this) {
             widgetSpacing = 0
             contentsMargins = 0.m
         }
-        val leftPanel  = QWidget(this).apply {
+        val leftPanel  = widget(this) {
             objectName = "leftPanel"
         }
-        val leftLayout = QVBoxLayout(leftPanel).apply {
+        val leftLayout = vBoxLayout(leftPanel) {
             contentsMargins = 6.m
             widgetSpacing = 6
         }
@@ -65,12 +68,12 @@ class NewProjectDialog internal constructor(parent: QWidget? = null): QDialog(pa
         }
         leftLayout.addWidget(list)
 
-        val rightPanel  = QWidget().apply {
+        val rightPanel  = widget {
             objectName = "rightPanel"
             autoFillBackground = true
             setAttribute(Qt.WidgetAttribute.WA_StyledBackground, true)
         }
-        val rightLayout = QVBoxLayout(rightPanel)
+        val rightLayout = vBoxLayout(rightPanel)
 
         rightLayout.addWidget(stacked, 1)
 
@@ -87,7 +90,7 @@ class NewProjectDialog internal constructor(parent: QWidget? = null): QDialog(pa
         }
 
         val btnRow = QWidget()
-        val btnLayout = QHBoxLayout(btnRow).apply {
+        val btnLayout = hBoxLayout(btnRow) {
             addStretch(1)
             addWidget(createButton)
             addWidget(cancelButton)

@@ -10,6 +10,9 @@ import io.github.footermandev.tritium.ui.theme.ThemeType
 import io.github.footermandev.tritium.ui.theme.qt.setThemedStyle
 import io.github.footermandev.tritium.ui.widgets.TComboBox
 import io.github.footermandev.tritium.ui.widgets.TPushButton
+import io.github.footermandev.tritium.ui.widgets.constructor_functions.hBoxLayout
+import io.github.footermandev.tritium.ui.widgets.constructor_functions.label
+import io.github.footermandev.tritium.ui.widgets.constructor_functions.vBoxLayout
 import io.qt.core.QModelIndex
 import io.qt.core.QSignalBlocker
 import io.qt.core.QUrl
@@ -91,25 +94,25 @@ class ThemesPanel internal constructor(): QWidget() {
 
     private fun createThemeSection(): QGroupBox {
         val group = QGroupBox("Themes")
-        val layout = QVBoxLayout(group).apply {
+        val layout = vBoxLayout(group) {
             contentsMargins = 12.m
             widgetSpacing = 12
         }
 
         val comboRow = QWidget()
-        val comboLayout = QHBoxLayout(comboRow).apply {
+        val comboLayout = hBoxLayout(comboRow) {
             contentsMargins = 0.m
             widgetSpacing = 8
         }
 
-        val label = QLabel("Theme:").apply { minimumWidth = 80 }
+        val label = label("Theme:") { minimumWidth = 80 }
 
         comboLayout.addWidget(label)
         comboLayout.addWidget(themeComboBox, 1)
         layout.addWidget(comboRow)
 
         val btnRow = QWidget()
-        val btnLayout = QHBoxLayout(btnRow)
+        val btnLayout = hBoxLayout(btnRow)
         btnLayout.contentsMargins = 0.m
         btnLayout.widgetSpacing = 8
         btnLayout.addWidget(openFolderBtn)
@@ -122,34 +125,34 @@ class ThemesPanel internal constructor(): QWidget() {
 
     private fun createFontSection(): QGroupBox {
         val group = QGroupBox("Fonts")
-        val layout = QVBoxLayout(group).apply {
+        val layout = vBoxLayout(group) {
             contentsMargins = 12.m
             widgetSpacing = 12
         }
 
         val fontsRow = QWidget()
-        val fontsLayout = QHBoxLayout(fontsRow).apply {
+        val fontsLayout = hBoxLayout(fontsRow) {
             contentsMargins = 0.m
             widgetSpacing = 8
         }
 
-        val fontsLabel = QLabel("Global Font:").apply { minimumWidth = 80 }
+        val fontsLabel = label("Global Font:") { minimumWidth = 80 }
         fontsLayout.addWidget(fontsLabel)
         fontsLayout.addWidget(globalFontComboBox, 1)
-        fontsLayout.addWidget(QLabel("Size:"))
+        fontsLayout.addWidget(label("Size:"))
         fontsLayout.addWidget(globalFontSizeSpinner)
         layout.addWidget(fontsRow)
 
         val editorRow = QWidget()
-        val editorLayout = QHBoxLayout(editorRow).apply {
+        val editorLayout = hBoxLayout(editorRow) {
             contentsMargins = 0.m
             widgetSpacing = 8
         }
 
-        val editorLabel = QLabel("Editor Font:").apply { minimumWidth = 80 }
+        val editorLabel = label("Editor Font:") { minimumWidth = 80 }
         editorLayout.addWidget(editorLabel)
         editorLayout.addWidget(editorFontComboBox, 1)
-        editorLayout.addWidget(QLabel("Size:"))
+        editorLayout.addWidget(label("Size:"))
         editorLayout.addWidget(editorFontSizeSpinner)
         layout.addWidget(editorRow)
 

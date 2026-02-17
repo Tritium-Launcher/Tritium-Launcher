@@ -1,10 +1,10 @@
 package io.github.footermandev.tritium.ui.widgets
 
 import io.github.footermandev.tritium.ui.theme.qt.qtStyle
+import io.github.footermandev.tritium.ui.widgets.constructor_functions.label
 import io.qt.Nullable
 import io.qt.core.Qt
 import io.qt.gui.*
-import io.qt.widgets.QLabel
 import io.qt.widgets.QWidget
 import kotlin.math.roundToInt
 
@@ -21,7 +21,7 @@ class LineLabelWidget(
 
 ): QWidget(parent) {
 
-    val label = QLabel(labelText, this).apply {
+    val label = label(labelText, this) {
         setAlignment(Qt.AlignmentFlag.AlignCenter)
         styleSheet = qtStyle {
             selector("QLabel") {

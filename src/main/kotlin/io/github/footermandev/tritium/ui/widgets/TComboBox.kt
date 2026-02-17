@@ -172,9 +172,8 @@ class TComboBox(parent: QWidget? = null) : QComboBox(parent) {
                 color("shadow", TColors.Button1)
                 color("primary", TColors.Button2)
                 color("bright", TColors.Button3)
-                color("disabledBorder", TColors.ButtonDisabled2)
                 color("disabled", TColors.ButtonDisabled0)
-                color("disabledBright", TColors.ButtonDisabled1)
+                color("disabledBorder", TColors.ButtonDisabled1)
             }
 
             state("normal") {
@@ -213,10 +212,10 @@ class TComboBox(parent: QWidget? = null) : QComboBox(parent) {
                     val h = height
                     fillRect(0, 0, w, h, "disabledBorder")
                     fillRect(p, p, w - p * 2, h - p * 2, "disabled")
-                    fillRect(p, p, w - p * 2, p, "disabledBright")
-                    fillRect(p, p, p, h - p * 3, "disabledBright")
-                    fillRect(w - p * 2, p, p, h - p * 3, "disabledBright")
-                    fillRect(p, h - p * 2, w - p * 2, p, "disabledBright")
+                    fillRect(p, p, w - p * 2, p, "disabled")
+                    fillRect(p, p, p, h - p * 3, "disabled")
+                    fillRect(w - p * 2, p, p, h - p * 3, "disabled")
+                    fillRect(p, h - p * 2, w - p * 2, p, "disabled")
                 }
             }
         }

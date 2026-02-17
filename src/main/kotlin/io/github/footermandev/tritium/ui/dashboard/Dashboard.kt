@@ -55,7 +55,7 @@ class Dashboard internal constructor() : QMainWindow() {
             objectName = "dashboard"
         }
 
-        val mainLayout = hBoxLayout(central).apply {
+        val mainLayout = hBoxLayout(central) {
             setSpacing(0)
             setContentsMargins(0, 0, 0, 0)
         }

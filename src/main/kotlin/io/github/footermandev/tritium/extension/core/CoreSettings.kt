@@ -6,8 +6,8 @@ import io.github.footermandev.tritium.settings.SettingWidgetContext
 import io.github.footermandev.tritium.settings.settingsDefinition
 import io.github.footermandev.tritium.ui.widgets.InfoLineEditWidget
 import io.github.footermandev.tritium.ui.widgets.constructor_functions.hBoxLayout
+import io.github.footermandev.tritium.ui.widgets.constructor_functions.label
 import io.qt.core.Qt
-import io.qt.widgets.QLabel
 import io.qt.widgets.QWidget
 import kotlinx.serialization.builtins.serializer
 
@@ -44,7 +44,7 @@ private class WindowSizeWidget(
         objectName = "settingsInput"
         minimumWidth = 72
     }
-    private val separator = QLabel("X").apply {
+    private val separator = label("X") {
         setAlignment(Qt.AlignmentFlag.AlignCenter)
         minimumWidth = 12
     }
@@ -56,7 +56,7 @@ private class WindowSizeWidget(
     private var isRefreshing = false
 
     init {
-        val layout = hBoxLayout(this).apply {
+        val layout = hBoxLayout(this) {
             setContentsMargins(0, 0, 0, 0)
             widgetSpacing = 6
             setAlignment(Qt.AlignmentFlag.AlignVCenter)

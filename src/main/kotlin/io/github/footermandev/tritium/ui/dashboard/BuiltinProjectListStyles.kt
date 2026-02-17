@@ -234,7 +234,7 @@ private class GridStyle(private val ctx: ProjectStyleContext) : ProjectListStyle
 
             sortedGroupNames.forEach { groupName ->
                 val section = qWidget()
-                val sectionLayout = vBoxLayout(section).apply { contentsMargins = QMargins(8, 0, 0, 6); widgetSpacing = 6 }
+                val sectionLayout = vBoxLayout(section) { contentsMargins = QMargins(8, 0, 0, 6); widgetSpacing = 6 }
 
                 val header = GroupHeaderLabel(groupName, ctx).apply {
                     text = if (groupName == "Ungrouped") "Ungrouped" else groupName
@@ -699,7 +699,7 @@ private class ProjectTile(
         setFixedWidth(GRID_TILE_WIDTH)
         minimumSize = qs(GRID_TILE_WIDTH, 0)
 
-        val layout = vBoxLayout(this).apply { contentsMargins = 8.m; widgetSpacing = 6; setAlignment(Qt.AlignmentFlag.AlignTop) }
+        val layout = vBoxLayout(this) { contentsMargins = 8.m; widgetSpacing = 6; setAlignment(Qt.AlignmentFlag.AlignTop) }
 
         val iconLabel = label {
             val iconSize = qs(GRID_ICON_SIZE, GRID_ICON_SIZE)
@@ -955,7 +955,7 @@ private class DraggableTile(
         setFixedWidth(GRID_TILE_WIDTH)
         cursor = defaultCursor()
 
-        val layout = vBoxLayout(this).apply { contentsMargins = 8.m; widgetSpacing = 6; setAlignment(Qt.AlignmentFlag.AlignTop) }
+        val layout = vBoxLayout(this) { contentsMargins = 8.m; widgetSpacing = 6; setAlignment(Qt.AlignmentFlag.AlignTop) }
         val iconLabel = label {
             val iconSize = qs(GRID_ICON_SIZE, GRID_ICON_SIZE)
             minimumSize = iconSize

@@ -161,7 +161,7 @@ class TToggleSwitch(parent: QWidget? = null) : QWidget(parent) {
                 color("surfaceShadowDark", QColor(TColors.Button1).darker(140))
                 color("shine", TColors.SelectedText)
 
-                color("disabledBorder", TColors.ButtonDisabled2)
+                color("disabledBorder", TColors.ButtonDisabled1)
                 color("disabledLight", TColors.ButtonDisabled1)
                 color("disabledMid", TColors.ButtonDisabled0)
                 color("disabledShadow", QColor(TColors.ButtonDisabled0).darker(130))

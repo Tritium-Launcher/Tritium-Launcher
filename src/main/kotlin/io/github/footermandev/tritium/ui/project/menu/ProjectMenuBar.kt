@@ -21,7 +21,7 @@ import io.qt.widgets.*
 class ProjectMenuBar : QWidget() {
     private val logger = logger()
 
-    private val layout = hBoxLayout(this).apply {
+    private val layout = hBoxLayout(this) {
         widgetSpacing = 6
         setContentsMargins(6, 2, 6, 2)
     }

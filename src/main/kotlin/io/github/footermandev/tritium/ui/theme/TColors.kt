@@ -17,7 +17,6 @@ object TColors {
     val Button3          get() = hex("Button3")
     val ButtonDisabled0  get() = hex("ButtonDisabled0")
     val ButtonDisabled1  get() = hex("ButtonDisabled1")
-    val ButtonDisabled2  get() = hex("ButtonDisabled2")
     val Surface0         get() = hex("Surface0")
     val Surface1         get() = hex("Surface1")
     val Surface2         get() = hex("Surface2")

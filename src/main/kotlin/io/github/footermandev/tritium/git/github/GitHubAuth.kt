@@ -9,6 +9,10 @@ import io.github.footermandev.tritium.platform.ClientIdentity
 import io.github.footermandev.tritium.platform.Platform.Companion.openBrowser
 import io.github.footermandev.tritium.ui.helpers.runOnGuiThread
 import io.github.footermandev.tritium.ui.widgets.BrowseLabel
+import io.github.footermandev.tritium.ui.widgets.TPushButton
+import io.github.footermandev.tritium.ui.widgets.constructor_functions.hBoxLayout
+import io.github.footermandev.tritium.ui.widgets.constructor_functions.label
+import io.github.footermandev.tritium.ui.widgets.constructor_functions.vBoxLayout
 import io.ktor.client.*
 import io.ktor.client.call.*
 import io.ktor.client.engine.cio.*
@@ -21,7 +25,9 @@ import io.ktor.http.*
 import io.ktor.serialization.kotlinx.json.*
 import io.qt.core.QTimer
 import io.qt.core.Qt
-import io.qt.widgets.*
+import io.qt.widgets.QApplication
+import io.qt.widgets.QDialog
+import io.qt.widgets.QWidget
 import kotlinx.coroutines.*
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
@@ -278,26 +284,26 @@ internal class GHDeviceFlowAuth(
                 minimumWidth = 480
             }
 
-            val layout = QVBoxLayout(dialog)
-            val info = QLabel("Open the URL below and enter the code to sign in to GitHub:")
+            val layout = vBoxLayout(dialog)
+            val info = label("Open the URL below and enter the code to sign in to GitHub:")
             info.wordWrap = true
             layout.addWidget(info)
 
             val urlLabel = BrowseLabel("<i>Waiting for verification URL...</i>")
             layout.addWidget(urlLabel)
 
-            val codeLabel = QLabel("<b style='font-size:18px;'>...</b>").apply {
+            val codeLabel = label("<b style='font-size:18px;'>...</b>").apply {
                 alignment = Qt.AlignmentFlag.AlignCenter.asAlignment()
             }
             layout.addWidget(codeLabel)
 
-            val hintLabel = QLabel("Waiting for code...")
+            val hintLabel = label("Waiting for code...")
             layout.addWidget(hintLabel)
 
             val btnRow = QWidget()
-            val btnLayout = QHBoxLayout(btnRow)
-            val openBtn = QPushButton("Open in browser")
-            val cancelBtn = QPushButton("Cancel")
+            val btnLayout = hBoxLayout(btnRow)
+            val openBtn = TPushButton { text = "Open in browser" }
+            val cancelBtn = TPushButton { text = "Cancel" }
             btnLayout.addStretch(1)
             btnLayout.addWidget(openBtn)
             btnLayout.addWidget(cancelBtn)

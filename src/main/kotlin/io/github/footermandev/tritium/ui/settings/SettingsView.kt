@@ -11,6 +11,7 @@ import io.github.footermandev.tritium.ui.widgets.InfoLineEditWidget
 import io.github.footermandev.tritium.ui.widgets.TPushButton
 import io.github.footermandev.tritium.ui.widgets.TToggleSwitch
 import io.github.footermandev.tritium.ui.widgets.constructor_functions.hBoxLayout
+import io.github.footermandev.tritium.ui.widgets.constructor_functions.label
 import io.github.footermandev.tritium.ui.widgets.constructor_functions.vBoxLayout
 import io.qt.core.Qt
 import io.qt.core.Qt.ItemDataRole.UserRole
@@ -33,16 +34,16 @@ class SettingsView : QWidget() {
         clearButtonEnabled = true
     }
 
-    private val headerTitle = QLabel().apply {
+    private val headerTitle = label {
         objectName = "settingsHeaderTitle"
     }
-    private val headerDesc = QLabel().apply {
+    private val headerDesc = label {
         objectName = "settingsHeaderDesc"
         wordWrap = true
     }
 
     private val settingsHost = QWidget()
-    private val settingsLayout = QVBoxLayout(settingsHost).apply {
+    private val settingsLayout = vBoxLayout(settingsHost) {
         contentsMargins = 0.m
         widgetSpacing = 8
     }
@@ -55,7 +56,6 @@ class SettingsView : QWidget() {
     private val cancelBtn = TPushButton {
         text = "Cancel"
         minimumHeight = 30
-        isEnabled = false
     }
     private val applyBtn = TPushButton {
         text = "Apply"
@@ -77,7 +77,7 @@ class SettingsView : QWidget() {
     init {
         objectName = "settingsView"
 
-        val mainLayout = hBoxLayout(this).apply {
+        val mainLayout = hBoxLayout(this) {
             contentsMargins = 0.m
             widgetSpacing = 0
         }
@@ -151,7 +151,7 @@ class SettingsView : QWidget() {
      */
     private fun buildNav(): QWidget {
         val nav = QWidget().apply { objectName = "settingsNav" }
-        val layout = vBoxLayout(nav).apply {
+        val layout = vBoxLayout(nav) {
             contentsMargins = 8.m
             widgetSpacing = 8
         }
@@ -169,7 +169,7 @@ class SettingsView : QWidget() {
      */
     private fun buildContent(): QWidget {
         val content = QWidget()
-        val layout = vBoxLayout(content).apply {
+        val layout = vBoxLayout(content) {
             contentsMargins = 12.m
             widgetSpacing = 10
         }
@@ -188,7 +188,7 @@ class SettingsView : QWidget() {
      */
     private fun buildActions(): QWidget {
         val actions = QWidget()
-        val layout = hBoxLayout(actions).apply {
+        val layout = hBoxLayout(actions) {
             contentsMargins = 0.m
             widgetSpacing = 8
         }
@@ -375,7 +375,7 @@ class SettingsView : QWidget() {
         currentRootNodes = emptyList()
 
         if (settings.isEmpty()) {
-            val emptyLabel = QLabel(emptyMessage).apply {
+            val emptyLabel = label(emptyMessage) {
                 objectName = "settingsEmpty"
                 wordWrap = true
             }
@@ -523,7 +523,10 @@ class SettingsView : QWidget() {
      * Discards all staged values and refreshes controls from persisted settings.
      */
     private fun cancelStagedChanges() {
-        if (pendingValues.isEmpty()) return
+        if (pendingValues.isEmpty()) {
+            closeHostingDialogIfPresent()
+            return
+        }
         pendingValues.clear()
         updateActionButtons()
         refreshAll()
@@ -534,8 +537,21 @@ class SettingsView : QWidget() {
      */
     private fun updateActionButtons() {
         val hasPending = pendingValues.isNotEmpty()
-        cancelBtn.isEnabled = hasPending
         applyBtn.isEnabled = hasPending
+    }
+
+    /**
+     * Closes the nearest parent [QDialog] if this view is hosted inside one.
+     */
+    private fun closeHostingDialogIfPresent() {
+        var current: QWidget? = this
+        while (current != null) {
+            if (current is QDialog) {
+                current.close()
+                return
+            }
+            current = current.parentWidget()
+        }
     }
 
     /**
@@ -584,11 +600,11 @@ class SettingsView : QWidget() {
         indent: Int
     ): SettingRow {
         val container = QWidget()
-        val layout = vBoxLayout(container).apply {
+        val layout = vBoxLayout(container) {
             setContentsMargins(indent * 16, 4, 4, 4)
             widgetSpacing = 4
         }
-        val label = QLabel(descriptor.title).apply {
+        val label = label(descriptor.title) {
             objectName = "settingComment"
             wordWrap = true
         }
@@ -617,19 +633,19 @@ class SettingsView : QWidget() {
     ): SettingRow {
         val typedNode = node as SettingNode<Boolean>
         val container = QWidget()
-        val layout = vBoxLayout(container).apply {
+        val layout = vBoxLayout(container) {
             setContentsMargins(indent * 16, 4, 4, 4)
             widgetSpacing = 4
         }
 
         val topRow = QWidget()
-        val topLayout = hBoxLayout(topRow).apply {
+        val topLayout = hBoxLayout(topRow) {
             contentsMargins = 0.m
             widgetSpacing = 8
             setAlignment(Qt.AlignmentFlag.AlignVCenter)
         }
 
-        val title = QLabel(descriptor.title).apply {
+        val title = label(descriptor.title) {
             objectName = "settingTitle"
             toolTip = descriptor.description.orEmpty()
         }
@@ -645,7 +661,7 @@ class SettingsView : QWidget() {
         layout.addWidget(topRow)
 
         val descLabel = descriptor.description?.takeIf { it.isNotBlank() }?.let {
-            QLabel(it).apply {
+            label(it) {
                 objectName = "settingDesc"
                 wordWrap = true
             }
@@ -701,19 +717,19 @@ class SettingsView : QWidget() {
     ): SettingRow {
         val typedNode = node as SettingNode<String>
         val container = QWidget()
-        val layout = vBoxLayout(container).apply {
+        val layout = vBoxLayout(container) {
             setContentsMargins(indent * 16, 4, 4, 4)
             widgetSpacing = 4
         }
 
         val topRow = QWidget()
-        val topLayout = hBoxLayout(topRow).apply {
+        val topLayout = hBoxLayout(topRow) {
             contentsMargins = 0.m
             widgetSpacing = 8
             setAlignment(Qt.AlignmentFlag.AlignVCenter)
         }
 
-        val title = QLabel(descriptor.title).apply {
+        val title = label(descriptor.title) {
             objectName = "settingTitle"
             toolTip = descriptor.description.orEmpty()
         }
@@ -732,7 +748,7 @@ class SettingsView : QWidget() {
         layout.addWidget(topRow)
 
         val descLabel = descriptor.description?.takeIf { it.isNotBlank() }?.let {
-            QLabel(it).apply {
+            label(it) {
                 objectName = "settingDesc"
                 wordWrap = true
             }
@@ -808,19 +824,19 @@ class SettingsView : QWidget() {
         @Suppress("UNCHECKED_CAST")
         val typedNode = node as SettingNode<Any?>
         val container = QWidget()
-        val layout = vBoxLayout(container).apply {
+        val layout = vBoxLayout(container) {
             setContentsMargins(indent * 16, 4, 4, 4)
             widgetSpacing = 4
         }
 
         val topRow = QWidget()
-        val topLayout = hBoxLayout(topRow).apply {
+        val topLayout = hBoxLayout(topRow) {
             contentsMargins = 0.m
             widgetSpacing = 8
             setAlignment(Qt.AlignmentFlag.AlignVCenter)
         }
 
-        val title = QLabel(descriptor.title).apply {
+        val title = label(descriptor.title) {
             objectName = "settingTitle"
             toolTip = descriptor.description.orEmpty()
         }
@@ -837,7 +853,7 @@ class SettingsView : QWidget() {
         layout.addWidget(topRow)
 
         val descLabel = descriptor.description?.takeIf { it.isNotBlank() }?.let {
-            QLabel(it).apply {
+            label(it) {
                 objectName = "settingDesc"
                 wordWrap = true
             }
