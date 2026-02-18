@@ -1,5 +1,5 @@
 <div align="left">
-  <img src="https://github.com/FooterManDev/Tritium-Launcher/blob/master/src/main/resources/icons/tritium.png" alt="Description" width="100" height="100">
+  <img src="https://github.com/FooterManDev/Tritium-Launcher/blob/main/src/main/resources/icons/tritium.png" alt="Description" width="100" height="100">
 </div>    
  
 # Tritium Launcher
