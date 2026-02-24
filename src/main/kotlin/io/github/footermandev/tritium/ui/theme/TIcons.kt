@@ -85,6 +85,7 @@ object TIcons {
     val SmallArrowDown get() = pix("ui/small_arrow_down", 16, 16)
     val SmallPause     get() = pix("ui/small_pause", 16, 16)
     val SmallPlay      get() = pix("ui/small_play", 16, 16)
+    val SmallMenu      get() = pix("ui/small_menu", 16, 16)
 
     private fun icon(keyOrPath: String, width: Int? = null, height: Int? = null): QIcon {
         val dpr = try {

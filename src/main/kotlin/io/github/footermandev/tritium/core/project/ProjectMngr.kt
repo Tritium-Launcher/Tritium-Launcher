@@ -1,10 +1,12 @@
 package io.github.footermandev.tritium.core.project
 
 import io.github.footermandev.tritium.TConstants
+import io.github.footermandev.tritium.core.project.settings.ProjectScopedSettingsMngr
 import io.github.footermandev.tritium.core.project.templates.MigrationRegistry
 import io.github.footermandev.tritium.core.project.templates.ProjectFileLoader
 import io.github.footermandev.tritium.core.project.templates.TemplateDescriptor
 import io.github.footermandev.tritium.core.project.templates.TemplateRegistry
+import io.github.footermandev.tritium.extension.core.BuiltinRegistries
 import io.github.footermandev.tritium.extension.core.CoreSettingValues
 import io.github.footermandev.tritium.fromTR
 import io.github.footermandev.tritium.io.VPath
@@ -89,6 +91,39 @@ object ProjectMngr {
         listeners.forEach { it.onProjectsFinishedLoading(snapshot) }
     }
 
+    private fun resolveProjectTypeForSettings(typeId: String): ProjectType? {
+        BuiltinRegistries.ProjectType.get(typeId)?.let { return it }
+        val localId = typeId.substringAfterLast(':', missingDelimiterValue = typeId)
+        if (localId != typeId) {
+            BuiltinRegistries.ProjectType.get(localId)?.let { resolved ->
+                logger.debug(
+                    "Resolved project type '{}' to local id '{}' for project-scoped settings",
+                    typeId,
+                    localId
+                )
+                return resolved
+            }
+        }
+        return null
+    }
+
+    private fun ensureProjectScopedSettings(project: ProjectBase) {
+        try {
+            val type = resolveProjectTypeForSettings(project.typeId)
+            if (type == null) {
+                logger.debug(
+                    "Skipping project-scoped settings initialization for {} (unknown project type '{}')",
+                    project.path,
+                    project.typeId
+                )
+                return
+            }
+            ProjectScopedSettingsMngr.ensureProjectFiles(project, type.projectSettings)
+        } catch (t: Throwable) {
+            logger.warn("Failed to initialize project-scoped settings for {}", project.path, t)
+        }
+    }
+
     private fun loadProjectFromDir(dir: VPath): ProjectBase? {
         val trMeta = ProjectFiles.readTrProject(dir) ?: run {
             logger.warn("No trproj.json found in {}", dir)
@@ -104,15 +139,20 @@ object ProjectMngr {
         val descriptor = TemplateRegistry.get(typeId)
         if(descriptor is ProjectFileLoader) {
             return try {
-                descriptor.loadFromProjectFile(trMeta, dir)
+                descriptor.loadFromProjectFile(trMeta, dir).also { project ->
+                    ensureProjectScopedSettings(project)
+                }
             } catch (e: Exception) {
                 logger.error("Failed to load project via ProjectFileLoader for type=$typeId in $dir", e)
-                ProjectBase(typeId, dir, name, icon, metaElem.jsonObjectOrEmpty())
+                ProjectBase(typeId, dir, name, icon, metaElem.jsonObjectOrEmpty()).also { project ->
+                    ensureProjectScopedSettings(project)
+                }
             }
         }
 
         if(descriptor != null) {
             try {
+                @Suppress("UNCHECKED_CAST")
                 val serializer = descriptor.serializer as KSerializer<Any>
                 val migratedMeta = if(schemaVersion < descriptor.currentSchema) {
                     try {
@@ -123,15 +163,23 @@ object ProjectMngr {
                     }
                 } else metaElem
                 val typed = json.decodeFromJsonElement(serializer, migratedMeta)
-                return (descriptor as TemplateDescriptor<Any>).createProjectFromMeta(typed, descriptor.currentSchema, dir)
+                @Suppress("UNCHECKED_CAST")
+                val typedDescriptor = descriptor as TemplateDescriptor<Any>
+                return typedDescriptor.createProjectFromMeta(typed, descriptor.currentSchema, dir).also { project ->
+                    ensureProjectScopedSettings(project)
+                }
             } catch (e: Exception) {
                 logger.error("Failed to decode meta for type=$typeId in $dir", e)
-                return ProjectBase(typeId, dir, name, icon, metaElem.jsonObjectOrEmpty())
+                return ProjectBase(typeId, dir, name, icon, metaElem.jsonObjectOrEmpty()).also { project ->
+                    ensureProjectScopedSettings(project)
+                }
             }
         }
 
         logger.warn("Unknown project type: $typeId (directory $dir)")
-        return ProjectBase(typeId, dir, name, icon, metaElem.jsonObjectOrEmpty())
+        return ProjectBase(typeId, dir, name, icon, metaElem.jsonObjectOrEmpty()).also { project ->
+            ensureProjectScopedSettings(project)
+        }
     }
 
     /**
@@ -511,6 +559,7 @@ object ProjectMngr {
      * Notify listeners that a project was created outside the manager.
      */
     fun notifyCreatedExternal(project: ProjectBase) {
+        ensureProjectScopedSettings(project)
         addProjectToCatalog(project.projectDir, project.name)
         synchronized(_projectsLock) {
             val existing = _projects.any { it.projectDir.toAbsolute() == project.projectDir.toAbsolute() }

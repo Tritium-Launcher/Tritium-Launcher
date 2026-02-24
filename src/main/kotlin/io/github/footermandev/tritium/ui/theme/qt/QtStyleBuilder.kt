@@ -40,6 +40,24 @@ class StyleBuilder internal constructor(private val selector: String? = null) {
 
     /** Sets border to none */
     fun border() { props["border"] = "none" }
+
+    /**
+     * Applies borders on every side except [excludedSide].
+     */
+    fun borderExcept(
+        excludedSide: String,
+        width: Int = 1,
+        color: String = "#ffffff",
+        style: String = "solid"
+    ) {
+        val excluded = excludedSide.lowercase()
+        border()
+        if(excluded != "top") border(width, color, "top", style)
+        if(excluded != "right") border(width, color, "right", style)
+        if(excluded != "bottom") border(width, color, "bottom", style)
+        if(excluded != "left") border(width, color, "left", style)
+    }
+
     fun borderRadius(radiusPx: Int, corner: Corner = Corner.All) {
         when(corner) {
             Corner.TLeft -> props["border-top-left-radius"] = "${radiusPx}px"

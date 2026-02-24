@@ -9,6 +9,7 @@ import io.github.footermandev.tritium.platform.Platform
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 import java.security.SecureRandom
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.locks.ReentrantLock
 import javax.crypto.Cipher
 import javax.crypto.spec.GCMParameterSpec
@@ -85,8 +86,14 @@ internal object MSAL {
     private object Keyring {
         private const val SERVICE = "TritiumMSAL"
         private const val ACCOUNT = "TritiumLauncherTokenKey"
+        private const val TOOL_TIMEOUT_SECONDS = 5L
 
         private val logger = logger()
+
+        private data class SecretToolResult(
+            val exitCode: Int,
+            val output: String
+        )
 
         fun getSecret(): ByteArray? = when(Platform.current) {
             Platform.Linux -> getLinuxSecret()
@@ -100,42 +107,68 @@ internal object MSAL {
             else -> false
         }
 
-        private fun getLinuxSecret(): ByteArray? {
-            try {
-                val p = ProcessBuilder("secret-tool", "lookup", "service", SERVICE, "account", ACCOUNT)
+        private fun runSecretTool(args: List<String>, stdin: String? = null): SecretToolResult? {
+            val action = if(args.size >= 2) args[1] else "command"
+            return try {
+                val p = ProcessBuilder(args)
                     .redirectErrorStream(true)
                     .start()
-                val out = p.inputStream.readAllBytes()
-                val rc = p.waitFor()
-                if(rc != 0) {
-                    logger.warn("secret-tool lookup returned $rc, no secret present")
+
+                if (stdin != null) {
+                    p.outputStream.bufferedWriter(Charsets.UTF_8).use { it.write(stdin) }
+                } else {
+                    p.outputStream.close()
+                }
+
+                val finished = p.waitFor(TOOL_TIMEOUT_SECONDS, TimeUnit.SECONDS)
+                if (!finished) {
+                    p.destroyForcibly()
+                    logger.warn("secret-tool {} timed out after {}s", action, TOOL_TIMEOUT_SECONDS)
                     return null
                 }
-                val b64 = String(out).trim()
-                if(b64.isBlank()) return null
-                return Base64.decode(b64)
+
+                val output = p.inputStream.bufferedReader(Charsets.UTF_8).use { it.readText() }.trim()
+                SecretToolResult(p.exitValue(), output)
             } catch (t: Throwable) {
-                logger.warn("Failed to get linux secret", t)
+                logger.warn("Failed to run secret-tool {}", action, t)
+                null
+            }
+        }
+
+        private fun getLinuxSecret(): ByteArray? {
+            val result = runSecretTool(
+                args = listOf("secret-tool", "lookup", "service", SERVICE, "account", ACCOUNT)
+            ) ?: return null
+
+            if(result.exitCode != 0) {
+                logger.warn("secret-tool lookup returned {}, no secret present", result.exitCode)
                 return null
+            }
+
+            val b64 = result.output
+            if(b64.isBlank()) return null
+
+            return try {
+                Base64.decode(b64)
+            } catch (t: Throwable) {
+                logger.warn("secret-tool lookup returned invalid base64 secret", t)
+                null
             }
         }
 
         private fun putLinuxSecret(secret: ByteArray): Boolean {
-            try {
-                val b64 = Base64.encode(secret)
-                val p = ProcessBuilder("secret-tool", "store", "--label", "Tritium MSAL key", "service", SERVICE, "account", ACCOUNT)
-                    .start()
-                p.outputStream.use { it.write(b64.toByteArray()) }
-                val rc = p.waitFor()
-                if(rc != 0) {
-                    logger.warn("secret-tool store returned $rc")
-                    return false
-                }
-                return true
-            } catch (t: Throwable) {
-                logger.warn("Failed to put linux secret", t)
+            val b64 = Base64.encode(secret)
+            val result = runSecretTool(
+                args = listOf("secret-tool", "store", "--label", "Tritium MSAL key", "service", SERVICE, "account", ACCOUNT),
+                stdin = b64
+            ) ?: return false
+
+            if(result.exitCode != 0) {
+                logger.warn("secret-tool store returned {}", result.exitCode)
                 return false
             }
+
+            return true
         }
 
         fun generateSecret(): ByteArray {

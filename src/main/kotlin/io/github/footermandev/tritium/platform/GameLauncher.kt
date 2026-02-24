@@ -6,9 +6,9 @@ import io.github.footermandev.tritium.core.modloader.LaunchContext
 import io.github.footermandev.tritium.core.modloader.ModLoader
 import io.github.footermandev.tritium.core.project.ModpackMeta
 import io.github.footermandev.tritium.core.project.ProjectBase
+import io.github.footermandev.tritium.extension.core.BuiltinRegistries
 import io.github.footermandev.tritium.extension.core.CoreSettingValues
 import io.github.footermandev.tritium.io.VPath
-import io.github.footermandev.tritium.koin.getRegistry
 import io.github.footermandev.tritium.logger
 import io.qt.gui.QGuiApplication
 import kotlinx.coroutines.*
@@ -67,7 +67,7 @@ object GameLauncher {
         val loaderVersion = meta.loaderVersion
         val mergedId = "$mcVersion-$loaderId-$loaderVersion"
 
-        val loader = getRegistry<ModLoader>("core.mod_loader").all().find { it.id == loaderId }
+        val loader = BuiltinRegistries.ModLoader.all().find { it.id == loaderId }
         if (loader == null) {
             logger.warn("No mod loader registered for id={}", loaderId)
             return

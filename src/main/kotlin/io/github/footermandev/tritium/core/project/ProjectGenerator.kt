@@ -33,9 +33,12 @@ class ProjectGenerator(private val uiCtx: CoroutineDispatcher = UIDispatcher) {
             logger.info("Finished generating project '{}'", projectType.id)
             withContext(uiCtx) { onProgress("Finished") }
             withContext(uiCtx) { onComplete(Result.success(result)) }
+        } catch (c: CancellationException) {
+            logger.info("Cancelled generating project '{}'", projectType.id)
+            withContext(NonCancellable + uiCtx) { onComplete(Result.failure(c)) }
         } catch (t: Throwable) {
             logger.warn("Failed to generate project '{}'", projectType.id, t)
-            withContext(uiCtx) { onComplete(Result.failure(t)) }
+            withContext(NonCancellable + uiCtx) { onComplete(Result.failure(t)) }
         }
     }
 

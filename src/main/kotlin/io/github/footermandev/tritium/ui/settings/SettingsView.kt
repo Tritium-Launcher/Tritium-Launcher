@@ -631,6 +631,7 @@ class SettingsView : QWidget() {
         descriptor: ToggleSettingDescriptor,
         indent: Int
     ): SettingRow {
+        @Suppress("UNCHECKED_CAST")
         val typedNode = node as SettingNode<Boolean>
         val container = QWidget()
         val layout = vBoxLayout(container) {
@@ -715,6 +716,7 @@ class SettingsView : QWidget() {
         descriptor: TextSettingDescriptor,
         indent: Int
     ): SettingRow {
+        @Suppress("UNCHECKED_CAST")
         val typedNode = node as SettingNode<String>
         val container = QWidget()
         val layout = vBoxLayout(container) {
@@ -764,16 +766,20 @@ class SettingsView : QWidget() {
             if (validation is SettingValidation.Invalid) {
                 input.setProperty("invalid", true)
                 input.toolTip = validation.reason
-                input.style().unpolish(input)
-                input.style().polish(input)
+                input.style()?.let { style ->
+                    style.unpolish(input)
+                    style.polish(input)
+                }
                 input.update()
                 input.text = lastValue
                 return@connect
             }
             input.setProperty("invalid", false)
             input.toolTip = descriptor.description.orEmpty()
-            input.style().unpolish(input)
-            input.style().polish(input)
+            input.style()?.let { style ->
+                style.unpolish(input)
+                style.polish(input)
+            }
             input.update()
             lastValue = effectiveValue(typedNode)
             updateAfterChange(typedNode)
@@ -798,8 +804,10 @@ class SettingsView : QWidget() {
                 val current = effectiveValue(typedNode)
                 input.text = current
                 input.setProperty("invalid", false)
-                input.style().unpolish(input)
-                input.style().polish(input)
+                input.style()?.let { style ->
+                    style.unpolish(input)
+                    style.polish(input)
+                }
                 input.update()
                 resetBtn.isEnabled = current != descriptor.defaultValue
                 lastValue = current

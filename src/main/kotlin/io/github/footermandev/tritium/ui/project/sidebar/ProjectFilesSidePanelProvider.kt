@@ -11,6 +11,7 @@ import io.github.footermandev.tritium.ui.theme.qt.icon
 import io.qt.core.Qt.ItemDataRole.UserRole
 import io.qt.gui.QIcon
 import io.qt.widgets.QAbstractItemView
+import io.qt.widgets.QFrame
 import io.qt.widgets.QTreeWidget
 import io.qt.widgets.QTreeWidgetItem
 
@@ -35,7 +36,9 @@ class ProjectFilesSidePanelProvider: SidePanelProvider {
         val tree = QTreeWidget().apply {
             headerHidden = true
             selectionMode = QAbstractItemView.SelectionMode.SingleSelection
-            alternatingRowColors = true
+            alternatingRowColors = false
+            frameShape = QFrame.Shape.NoFrame
+            styleSheet = "QTreeWidget { border: none; }"
         }
         dock.setWidget(tree)
 
@@ -59,7 +62,8 @@ class ProjectFilesSidePanelProvider: SidePanelProvider {
 
     private fun populateTree(project: ProjectBase, tree: QTreeWidget) {
         tree.clear()
-        buildNode(project.projectDir, tree.invisibleRootItem(), project)
+        val root = tree.invisibleRootItem() ?: return
+        buildNode(project.projectDir, root, project)
     }
 
     private fun buildNode(path: VPath, parent: QTreeWidgetItem, project: ProjectBase) {

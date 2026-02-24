@@ -70,11 +70,11 @@ private class GroupHeaderLabel(
 
     private fun showContextMenu(globalPos: QPoint) {
         val menu = QMenu(this).apply {
-            addAction("Move Up").triggered.connect {
+            addAction("Move Up")?.triggered?.connect {
                 ctx.groupStore.moveGroup(groupName, -1)
                 ctx.requestRefresh()
             }
-            addAction("Move Down").triggered.connect {
+            addAction("Move Down")?.triggered?.connect {
                 ctx.groupStore.moveGroup(groupName, 1)
                 ctx.requestRefresh()
             }
@@ -741,7 +741,7 @@ private class ProjectTile(
             event.accept()
         }
         if (event?.button() == Qt.MouseButton.RightButton) {
-            showContextMenu(event.globalPos())
+            showContextMenu(event.globalPosition().toPoint())
             event.accept()
         }
     }
@@ -790,18 +790,18 @@ private class ProjectTile(
         }
         val groups = ctx.groupStore.groupNames()
         val assign = menu.addMenu("Move to group")
-        assign.addAction("Ungroup").triggered.connect {
+        assign?.addAction("Ungroup")?.triggered?.connect {
             ctx.groupStore.assign(project.path.toString(), null)
             ctx.requestRefresh()
         }
         groups.forEach { g ->
-            assign.addAction(g).triggered.connect {
+            assign?.addAction(g)?.triggered?.connect {
                 ctx.groupStore.assign(project.path.toString(), g)
                 ctx.requestRefresh()
             }
         }
-        assign.addSeparator()
-        assign.addAction("New group...").triggered.connect { promptNewGroup() }
+        assign?.addSeparator()
+        assign?.addAction("New group...")?.triggered?.connect { promptNewGroup() }
         menu.exec(pos)
     }
 

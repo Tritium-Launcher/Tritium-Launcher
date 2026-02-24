@@ -14,7 +14,7 @@ plugins {
 ksp { arg("verbose", "true") }
 
 group = "io.github.footermandev.tritium"
-version = "0.0.0"
+version = "0.1.1"
 
 val os: OperatingSystem = OperatingSystem.current()
 val arch: String = System.getProperty("os.arch").lowercase()
@@ -118,6 +118,9 @@ tasks.shadowJar {
 }
 
 val compileKotlin: KotlinCompile by tasks
-compileKotlin.compilerOptions {
-    freeCompilerArgs.set(listOf("-Xcontext-parameters"))
+compileKotlin.apply {
+    compilerOptions {
+        freeCompilerArgs.set(listOf("-Xcontext-parameters"))
+        allWarningsAsErrors = true
+    }
 }

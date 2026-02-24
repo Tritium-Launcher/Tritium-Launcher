@@ -93,7 +93,7 @@ private class WindowSizeWidget(
                     setInvalid(true)
                 }
                 else -> {
-                    val defaultRaw = (ctx.descriptor.defaultValue as? String).orEmpty()
+                    val defaultRaw = ctx.descriptor.defaultValue
                     val defaultParts = parseWindowSizeParts(defaultRaw)
                     widthInput.text = defaultParts?.width.orEmpty()
                     heightInput.text = defaultParts?.height.orEmpty()
@@ -123,8 +123,10 @@ private class WindowSizeWidget(
 
     private fun applyInvalid(input: InfoLineEditWidget, invalid: Boolean) {
         input.setProperty("invalid", invalid)
-        input.style().unpolish(input)
-        input.style().polish(input)
+        input.style()?.let { style ->
+            style.unpolish(input)
+            style.polish(input)
+        }
         input.update()
     }
 }

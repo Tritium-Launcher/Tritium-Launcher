@@ -114,9 +114,11 @@ private class JavaRuntimeAutoDetectDialog(
         table.selectionMode = QAbstractItemView.SelectionMode.SingleSelection
         table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         table.alternatingRowColors = true
-        table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
-        table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
-        table.horizontalHeader().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        table.horizontalHeader()?.let { header ->
+            header.setSectionResizeMode(0, QHeaderView.ResizeMode.ResizeToContents)
+            header.setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+            header.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        }
 
         table.itemSelectionChanged.connect {
             if (filling) return@connect

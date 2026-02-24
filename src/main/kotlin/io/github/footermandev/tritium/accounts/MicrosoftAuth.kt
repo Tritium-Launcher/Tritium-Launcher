@@ -114,7 +114,7 @@ object MicrosoftAuth {
             ProfileMngr.Cache.init(mcToken)
             return ProfileMngr.Cache.get()
         } catch (e: Exception) {
-            authLogger.error("Microsoft interactive sign-in failed")
+            authLogger.error("Microsoft interactive sign-in failed", e)
             throw AuthenticationException("Microsoft interactive sign-in failed", e)
         }
     }

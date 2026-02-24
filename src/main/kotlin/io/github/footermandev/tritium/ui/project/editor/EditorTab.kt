@@ -48,13 +48,13 @@ class EditorTab(icon: QIcon?, text: String, private val parentBar: EditorTabBar)
     var showClose: Boolean = false
         set(value) {
             field = value
-            closeBtn.isVisible = value
             updateCloseBtn()
         }
 
     init {
         objectName = "EditorTab"
         setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        setFixedHeight(parentBar.tabHeightPx())
 
         layout.apply {
             setContentsMargins(6,4,6,4)
@@ -156,7 +156,10 @@ class EditorTab(icon: QIcon?, text: String, private val parentBar: EditorTabBar)
     }
 
     private fun updateCloseBtn() {
-        closeBtn.isVisible = showClose
+        closeBtn.isVisible = true
+        closeBtn.isEnabled = showClose
+        closeBtn.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, !showClose)
+        closeBtn.icon = if(showClose) TIcons.SmallCross.icon else QIcon()
     }
 
     override fun paintEvent(event: @Nullable QPaintEvent?) {
@@ -170,6 +173,13 @@ class EditorTab(icon: QIcon?, text: String, private val parentBar: EditorTabBar)
         if(colorStr != "transparent") {
             val color = parseRgbaColor(colorStr)
             painter.fillRect(rect, color)
+        }
+
+        if(isSelected) {
+            val indicatorHeight = 2
+            val indicatorInset = 4
+            val indicatorWidth = (width() - indicatorInset * 2).coerceAtLeast(1)
+            painter.fillRect(indicatorInset, height() - indicatorHeight, indicatorWidth, indicatorHeight, QColor(255, 255, 255, 230))
         }
 
         painter.end()
@@ -193,7 +203,7 @@ class EditorTab(icon: QIcon?, text: String, private val parentBar: EditorTabBar)
         val fm = fontMetrics()
         val textW = fm.horizontalAdvance(textLabel.text)
         val w = 6 + 16 + 6 + textW + 6 + 16 + 6
-        val h = 28
+        val h = parentBar.tabHeightPx()
         return qs(w, h)
     }
 }

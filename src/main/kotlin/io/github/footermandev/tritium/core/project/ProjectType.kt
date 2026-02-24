@@ -1,5 +1,6 @@
 package io.github.footermandev.tritium.core.project
 
+import io.github.footermandev.tritium.core.project.settings.ProjectSettingDefinition
 import io.github.footermandev.tritium.core.project.templates.TemplateExecutionResult
 import io.github.footermandev.tritium.registry.Registrable
 import io.qt.gui.QIcon
@@ -15,6 +16,7 @@ interface ProjectType: Registrable {
     val description: String
     val icon: QIcon
     val order: Int
+    val projectSettings: List<ProjectSettingDefinition> get() = emptyList()
 
     /**
      * Build a setup widget for collecting project variables.

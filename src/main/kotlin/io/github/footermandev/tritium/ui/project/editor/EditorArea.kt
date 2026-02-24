@@ -5,11 +5,11 @@ import io.github.footermandev.tritium.extension.core.BuiltinRegistries
 import io.github.footermandev.tritium.io.VPath
 import io.github.footermandev.tritium.logger
 import io.github.footermandev.tritium.registry.DeferredRegistryBuilder
-import io.github.footermandev.tritium.registry.Registry
-import io.github.footermandev.tritium.registry.RegistryMngr
-import io.github.footermandev.tritium.ui.project.editor.syntax.SyntaxLanguage
+import io.github.footermandev.tritium.ui.theme.TColors
+import io.github.footermandev.tritium.ui.theme.qt.setThemedStyle
 import io.github.footermandev.tritium.ui.widgets.constructor_functions.vBoxLayout
 import io.qt.gui.QIcon
+import io.qt.widgets.QFrame
 import io.qt.widgets.QStackedWidget
 import io.qt.widgets.QTextEdit
 import io.qt.widgets.QWidget
@@ -26,19 +26,33 @@ class EditorArea(
     private val tabBar = EditorTabBar()
     private val stack = QStackedWidget()
     private val paneIdx = mutableMapOf<Int, EditorPane>()
-    private val providerRegistry: Registry<EditorPaneProvider> =
-        RegistryMngr.getOrCreateRegistry("ui.editor_pane")
+    private val providerRegistry = BuiltinRegistries.EditorPane
+    private val syntaxRegistry = BuiltinRegistries.SyntaxLanguage
     private var providersSnapshot: List<EditorPaneProvider> = emptyList()
-    private val syntaxRegistry: Registry<SyntaxLanguage> =
-        RegistryMngr.getOrCreateRegistry<SyntaxLanguage>("ui.syntax")
 
     private val logger = logger()
 
     init {
+        container.objectName = "editorArea"
+        stack.objectName = "editorStack"
         tabBar.apply {
             onTabCloseRequest = { idx -> closeTab(idx) }
             onCurrentChanged = { idx -> onTabSelected(idx) }
         }
+        container.setThemedStyle {
+            val editorSurface = TColors.Surface1
+            selector("#editorArea") {
+                backgroundColor(editorSurface)
+                border()
+            }
+            selector("#editorStack") {
+                backgroundColor(editorSurface)
+                border()
+            }
+        }
+        mainLayout.setContentsMargins(0, 0, 0, 0)
+        mainLayout.setSpacing(0)
+        stack.frameShape = QFrame.Shape.NoFrame
         mainLayout.addWidget(tabBar)
         mainLayout.addWidget(stack)
         DeferredRegistryBuilder(providerRegistry) { list ->
@@ -81,6 +95,8 @@ class EditorArea(
 
         init {
             text.lineWrapMode = QTextEdit.LineWrapMode.NoWrap
+            text.frameShape = QFrame.Shape.NoFrame
+            text.viewport()?.setContentsMargins(0, 0, 0, 0)
             try { if(file.exists()) text.plainText = file.readTextOr("") } catch (_: Throwable) {}
         }
 

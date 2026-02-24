@@ -51,10 +51,10 @@ class AutoLoadingRegistry<T : Any, P : Any>(
             { ServiceLoader.load(provCls, Thread.currentThread().contextClassLoader) }
         )
 
-        var loader: ServiceLoader<Any>? = null
+        var loader: ServiceLoader<P>? = null
         for(tryLoad in loaderToTry) {
             loader = try {
-                tryLoad() as ServiceLoader<Any>
+                tryLoad()
             } catch (e: ServiceConfigurationError) {
                 logger.warn("ServiceLoader initial load failed for ${provCls.name}", e)
                 null
@@ -87,8 +87,7 @@ class AutoLoadingRegistry<T : Any, P : Any>(
             }
 
             try {
-                @Suppress("UNCHECKED_CAST")
-                val item = (mapper as (Any) -> T?)(provInstance)
+                val item = mapper(provInstance)
                 if (item != null) {
                     register(item)
                     logger.info("Registered provider item: ${idFn(item)} from ${provInstance::class.qualifiedName}")

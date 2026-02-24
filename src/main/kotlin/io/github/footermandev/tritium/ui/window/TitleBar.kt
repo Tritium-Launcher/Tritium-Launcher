@@ -80,11 +80,11 @@ class TitleBar(private val mainWindow: QMainWindow): QWidget(mainWindow) {
                     handle.startSystemMove()
                 } catch (_: Throwable) {
                     dragging = true
-                    dragStart = event.globalPos()
+                    dragStart = event.globalPosition().toPoint()
                 }
             } else {
                 dragging = true
-                dragStart = event.globalPos()
+                dragStart = event.globalPosition().toPoint()
             }
             event.accept()
         } else {
@@ -106,8 +106,8 @@ class TitleBar(private val mainWindow: QMainWindow): QWidget(mainWindow) {
 
     override fun mouseMoveEvent(event: @Nullable QMouseEvent?) {
         super.mouseMoveEvent(event)
-        if (dragging) {
-            val g = event?.globalPos()!! //TODO: Remove assertion
+        if (dragging && event != null) {
+            val g = event.globalPosition().toPoint()
             val dx = g.x() - dragStart.x()
             val dy = g.y() - dragStart.y()
             mainWindow.move(mainWindow.x() + dx, mainWindow.y() + dy)

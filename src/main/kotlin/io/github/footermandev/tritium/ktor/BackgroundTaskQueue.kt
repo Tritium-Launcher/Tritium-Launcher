@@ -47,7 +47,7 @@ class BackgroundTaskQueue(
 
     init {
         repeat(maxConcurrency) { idx ->
-            val job = scope.launch(start = CoroutineStart.ATOMIC) {
+            val job = scope.launch {
                 consumeTasks(channel, idx)
             }
             workerJobs += job

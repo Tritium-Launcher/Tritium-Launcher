@@ -2,6 +2,7 @@ package io.github.footermandev.tritium.ui.project.sidebar
 
 import io.github.footermandev.tritium.core.project.ProjectBase
 import io.github.footermandev.tritium.registry.Registrable
+import io.qt.core.Qt
 import io.qt.gui.QIcon
 
 /**
@@ -15,6 +16,7 @@ interface SidePanelProvider: Registrable {
 
     val closeable: Boolean get() = true
     val floatable: Boolean get() = true
+    val preferredArea: Qt.DockWidgetArea get() = Qt.DockWidgetArea.LeftDockWidgetArea
 
     fun create(project: ProjectBase): DockWidget
 }

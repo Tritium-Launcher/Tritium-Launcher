@@ -4,20 +4,20 @@ import io.github.footermandev.tritium.*
 import io.github.footermandev.tritium.accounts.MCVersion
 import io.github.footermandev.tritium.accounts.MCVersionType
 import io.github.footermandev.tritium.accounts.MicrosoftAuth
-import io.github.footermandev.tritium.core.modloader.ModLoader
-import io.github.footermandev.tritium.core.modpack.ModSource
+import io.github.footermandev.tritium.core.project.settings.ProjectSettingDefinition
 import io.github.footermandev.tritium.core.project.templates.ProjectTemplateExecutor
 import io.github.footermandev.tritium.core.project.templates.TemplateExecutionResult
 import io.github.footermandev.tritium.core.project.templates.generation.GeneratorStepDescriptor
 import io.github.footermandev.tritium.core.project.templates.generation.license.AuthorResolver
-import io.github.footermandev.tritium.core.project.templates.generation.license.License
 import io.github.footermandev.tritium.core.project.templates.generation.license.LicenseGenerator
+import io.github.footermandev.tritium.extension.core.BuiltinRegistries
 import io.github.footermandev.tritium.extension.core.CoreSettingValues
 import io.github.footermandev.tritium.git.Git
 import io.github.footermandev.tritium.io.VPath
-import io.github.footermandev.tritium.koin.getRegistry
 import io.github.footermandev.tritium.platform.Platform
 import io.github.footermandev.tritium.ui.helpers.runOnGuiThread
+import io.github.footermandev.tritium.ui.notifications.NotificationMngr
+import io.github.footermandev.tritium.ui.project.ProjectTaskMngr
 import io.github.footermandev.tritium.ui.theme.TIcons
 import io.github.footermandev.tritium.ui.theme.qt.setStyle
 import io.github.footermandev.tritium.ui.theme.setInvalid
@@ -41,12 +41,27 @@ class ModpackProjectType : ProjectType {
     override val description: String = "Create a ModPack project"
     override val icon: QIcon = QIcon(TIcons.TrMeta)
     override val order: Int = 1
+    override val projectSettings: List<ProjectSettingDefinition> = listOf(
+        ProjectSettingDefinition(
+            key = "mc_java_path",
+            comments = listOf("Optional Java executable path used only for this project.")
+        ),
+        ProjectSettingDefinition(
+            key = "mc_args",
+            comments = listOf("Extra JVM args applied when launching Minecraft.")
+        ),
+        ProjectSettingDefinition(
+            key = "mc_memory",
+            defaultValue = "6144",
+            comments = listOf("Default memory allocation (MB) for Minecraft.")
+        ),
+    )
 
-    private val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-    private val logger = logger()
-    private val licenses = getRegistry<License>("core.license")
-    private val modLoaders = getRegistry<ModLoader>("core.mod_loader")
-    private val modSources = getRegistry<ModSource>("core.mod_source")
+    private val scope      = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+    private val logger     = logger()
+    private val licenses   = BuiltinRegistries.License
+    private val modLoaders = BuiltinRegistries.ModLoader
+    private val modSources = BuiltinRegistries.ModSource
 
     override fun createSetupWidget(
         projectRootHint: Path?,
@@ -301,6 +316,24 @@ class ModpackProjectType : ProjectType {
             (sourceCombo.currentData as? String)?.let { initialVars["modSource"] = it }
         }
 
+        fun versionNumberParts(version: String): List<Long> {
+            val core = Regex("^\\d+(?:\\.\\d+)*").find(version)?.value
+            val parts = core?.split('.') ?: Regex("\\d+").findAll(version).map { it.value }.toList()
+            return parts.mapNotNull { it.toLongOrNull() }
+        }
+
+        fun compareVersionNumbers(a: String, b: String): Int {
+            val av = versionNumberParts(a)
+            val bv = versionNumberParts(b)
+            val max = maxOf(av.size, bv.size)
+            for (i in 0 until max) {
+                val ai = av.getOrElse(i) { 0L }
+                val bi = bv.getOrElse(i) { 0L }
+                if (ai != bi) return ai.compareTo(bi)
+            }
+            return a.compareTo(b)
+        }
+
         fun updateCompatibleVersions() {
             val loaderId = modLoaderCombo.currentData as? String
             val mcVersion = mcCombo.currentData as? String
@@ -320,7 +353,9 @@ class ModpackProjectType : ProjectType {
 
                 runOnGuiThread {
                     modLoaderVerCombo.clear()
-                    compatible.forEach { v -> modLoaderVerCombo.addItem(v, v) }
+                    compatible
+                        .sortedWith { a, b -> compareVersionNumbers(b, a) }
+                        .forEach { v -> modLoaderVerCombo.addItem(v, v) }
                     if (modLoaderVerCombo.count > 0) {
                         modLoaderVerCombo.currentIndex = 0
                         (modLoaderVerCombo.currentData as? String)?.let { initialVars["modLoaderVersion"] = it }
@@ -536,13 +571,24 @@ class ModpackProjectType : ProjectType {
 
             // Kick heavy downloads to background
             CoroutineScope(Dispatchers.IO + SupervisorJob()).launch {
+                val bootstrapTaskId = ProjectTaskMngr.start(
+                    projectPath = projectRoot,
+                    title = "Bootstrapping $packName",
+                    detail = "Preparing runtime files",
+                    progressPercent = 5.0
+                )
+                var bootstrapSucceeded = false
+                var failureDetail: String? = null
                 logger.info("Background bootstrap start for {} (MC {}, loader {} {})", packName, mcVer, loader.id, loaderVersion)
                 try {
                     coroutineScope {
                         val mcJob = async {
+                            ProjectTaskMngr.update(bootstrapTaskId, detail = "Setting up Minecraft $mcVer")
+                            ProjectTaskMngr.updateProgress(bootstrapTaskId, 20.0)
                             val mcStart = System.currentTimeMillis()
                             val ok = MicrosoftAuth.setupMinecraftInstance(mcVer, projectRoot)
                             logger.info("Minecraft setup {} ({})", if(ok) "ok" else "failed", formatDurationMs(System.currentTimeMillis() - mcStart))
+                            ProjectTaskMngr.updateProgress(bootstrapTaskId, if (ok) 55.0 else 40.0)
                             ok
                         }
 
@@ -559,6 +605,11 @@ class ModpackProjectType : ProjectType {
 
                         val mcOk = mcJob.await()
                         if (mcOk) {
+                            ProjectTaskMngr.update(
+                                bootstrapTaskId,
+                                detail = "Installing ${loader.displayName} $loaderVersion"
+                            )
+                            ProjectTaskMngr.updateProgress(bootstrapTaskId, 70.0)
                             val loaderStart = System.currentTimeMillis()
                             logger.info("Installing loader {} {} into {}", loader.id, loaderVersion, projectRoot)
                             val ok = loader.installClient(loaderVersion, mcVer, projectRoot)
@@ -566,17 +617,55 @@ class ModpackProjectType : ProjectType {
                             if (ok) {
                                 val merged = MicrosoftAuth.writeMergedVersionJson(mcVer, loader.id, loaderVersion, projectRoot)
                                 logger.info("Merged version json written to {}", merged?.toAbsolute() ?: "null")
+                                ProjectTaskMngr.update(bootstrapTaskId, detail = "Finalizing bootstrap")
+                                ProjectTaskMngr.updateProgress(bootstrapTaskId, 95.0)
+                                bootstrapSucceeded = true
+                            } else {
+                                failureDetail = "Failed to install ${loader.displayName}."
                             }
                         } else {
                             logger.warn("Skipping loader install; Minecraft setup failed for {}", packName)
+                            failureDetail = "Failed to set up Minecraft runtime."
                         }
 
                         gitJob.await()
                     }
                 } catch (t: Throwable) {
                     logger.warn("Background bootstrap failed for {}", packName, t)
+                    failureDetail = t.message?.trim().takeUnless { it.isNullOrEmpty() }
+                        ?: "Unexpected bootstrap error."
+                } finally {
+                    if (bootstrapSucceeded) {
+                        ProjectTaskMngr.update(bootstrapTaskId, detail = "Bootstrap finished")
+                        ProjectTaskMngr.updateProgress(bootstrapTaskId, 100.0)
+                    }
+                    ProjectTaskMngr.finish(bootstrapTaskId)
+
+                    val projectRef = ProjectMngr.getProject(projectRoot)
+                    if (bootstrapSucceeded) {
+                        NotificationMngr.post(
+                            id = "bootstrap_success",
+                            project = projectRef,
+                            description = "Project '$packName' is ready.",
+                            metadata = mapOf(
+                                "source" to "modpack.bootstrap",
+                                "result" to "success",
+                            )
+                        )
+                    } else {
+                        val reason = failureDetail ?: "Unknown error."
+                        NotificationMngr.post(
+                            id = "bootstrap_failure",
+                            project = projectRef,
+                            description = "Project '$packName' bootstrap failed: $reason",
+                            metadata = mapOf(
+                                "source" to "modpack.bootstrap",
+                                "result" to "failed",
+                            )
+                        )
+                    }
                 }
-                logger.info("BACKGROUND BOOTSTRAP FINISHED for {}", packName)
+                logger.info("BACKGROUND BOOTSTRAP FINISHED for {} (success={})", packName, bootstrapSucceeded)
             }
         }
 

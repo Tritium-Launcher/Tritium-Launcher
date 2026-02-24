@@ -6,7 +6,7 @@ import io.github.footermandev.tritium.registry.Registrable
 /**
  * Describes a syntax highlighting language and optional LSP integration.
  *
- * Languages are registered in the `ui.syntax` registry and used by the editor to
+ * Languages are gathered from the registry and used by the editor to
  * pick highlighting rules based on file matches.
  */
 interface SyntaxLanguage: Registrable {

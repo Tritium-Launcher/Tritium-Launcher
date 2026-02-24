@@ -9,6 +9,7 @@ import io.github.footermandev.tritium.ui.project.editor.syntax.SyntaxLanguage
 import io.github.footermandev.tritium.ui.project.editor.syntax.UniversalHighlighter
 import io.qt.gui.QFont
 import io.qt.gui.QSyntaxHighlighter
+import io.qt.widgets.QFrame
 import io.qt.widgets.QTextEdit
 import io.qt.widgets.QWidget
 
@@ -30,6 +31,8 @@ class TextEditorPane(
     init {
         textEdit.font = font
         textEdit.lineWrapMode = QTextEdit.LineWrapMode.NoWrap
+        textEdit.frameShape = QFrame.Shape.NoFrame
+        textEdit.viewport()?.setContentsMargins(0, 0, 0, 0)
         highlighter = language?.let {
             UniversalHighlighter(textEdit.document!!, it)// TODO: Cannot leave assert
         }

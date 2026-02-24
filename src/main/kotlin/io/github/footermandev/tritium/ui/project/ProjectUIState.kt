@@ -3,6 +3,7 @@ package io.github.footermandev.tritium.ui.project
 import kotlinx.serialization.Serializable
 
 @Serializable
+@ConsistentCopyVisibility
 data class ProjectUIState internal constructor(
     val tabMode: String = "SINGLE_ROW",
     val openFiles: List<String> = emptyList(),

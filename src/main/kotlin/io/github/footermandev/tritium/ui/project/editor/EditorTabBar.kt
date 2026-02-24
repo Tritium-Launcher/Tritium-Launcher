@@ -4,8 +4,10 @@ import io.github.footermandev.tritium.connect
 import io.github.footermandev.tritium.m
 import io.github.footermandev.tritium.onClicked
 import io.github.footermandev.tritium.qs
+import io.github.footermandev.tritium.ui.theme.TColors
 import io.github.footermandev.tritium.ui.theme.TIcons
 import io.github.footermandev.tritium.ui.theme.ThemeMngr
+import io.github.footermandev.tritium.ui.theme.qt.StyleBuilder
 import io.github.footermandev.tritium.ui.theme.qt.icon
 import io.github.footermandev.tritium.ui.theme.qt.qtStyle
 import io.github.footermandev.tritium.ui.widgets.constructor_functions.hBoxLayout
@@ -13,8 +15,7 @@ import io.github.footermandev.tritium.ui.widgets.constructor_functions.toolButto
 import io.github.footermandev.tritium.ui.widgets.constructor_functions.widget
 import io.qt.Nullable
 import io.qt.core.*
-import io.qt.gui.QIcon
-import io.qt.gui.QWheelEvent
+import io.qt.gui.*
 import io.qt.widgets.*
 
 /**
@@ -36,7 +37,7 @@ class EditorTabBar(parent: QWidget? = null) : QWidget(parent) {
         tabWidgets.forEach { it.updateColors() }
     }
 
-    var selectedHoveredTabColor: String = "rgba(255,255,255,0.3)"
+    var selectedHoveredTabColor: String = "rgba(255,255,255,0.18)"
         set(value) {
             field = value
             tabWidgets.forEach { it.updateColors() }
@@ -71,6 +72,10 @@ class EditorTabBar(parent: QWidget? = null) : QWidget(parent) {
     private val tabBarHeight = 32
 
     init {
+        objectName = "editorTabBar"
+        scrollArea.objectName = "editorTabBarScroll"
+        content.objectName = "editorTabBarContent"
+        dropdownBtn.objectName = "editorTabBarDropdown"
         setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         setFixedHeight(tabBarHeight)
 
@@ -82,25 +87,30 @@ class EditorTabBar(parent: QWidget? = null) : QWidget(parent) {
         }
 
         scrollArea.apply {
-            widgetResizable = true
+            widgetResizable = false
             setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
             setFixedHeight(tabBarHeight)
             verticalScrollBarPolicy = Qt.ScrollBarPolicy.ScrollBarAlwaysOff
             horizontalScrollBarPolicy = Qt.ScrollBarPolicy.ScrollBarAlwaysOff
             frameShape = QFrame.Shape.NoFrame
+            setAlignment(Qt.AlignmentFlag.AlignLeft)
+        }
+        scrollArea.viewport()?.apply {
+            setContentsMargins(0,0,0,0)
+            objectName = "editorTabBarViewport"
+            autoFillBackground = true
         }
 
         contentLayout.apply {
             widgetSpacing = 6
-            setContentsMargins(4,2,4,2)
-            addStretch()
+            setContentsMargins(0,0,0,0)
         }
 
         dropdownBtn.apply {
             setFixedSize(28, tabBarHeight)
             icon = TIcons.SmallArrowDown.icon
             iconSize = qs(16, 16)
-            autoRaise = true
+            autoRaise = false
             onClicked { showTabListMenu() }
         }
 
@@ -108,10 +118,16 @@ class EditorTabBar(parent: QWidget? = null) : QWidget(parent) {
         destroyed.connect { ThemeMngr.removeListener(themeListener) }
 
         content.setFixedHeight(tabBarHeight)
+        content.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
         content.setLayout(contentLayout)
         scrollArea.setWidget(content)
 
-        scrollArea.installEventFilter(object : QObject(scrollArea) {
+        scrollArea.horizontalScrollBar()?.apply {
+            valueChanged.connect { _ -> updateOverflowState() }
+            rangeChanged.connect { _, _ -> updateOverflowState() }
+        }
+
+        val wheelFilter = object : QObject(scrollArea) {
             override fun eventFilter(
                 watched: @Nullable QObject?,
                 event: @Nullable QEvent?
@@ -122,7 +138,13 @@ class EditorTabBar(parent: QWidget? = null) : QWidget(parent) {
                 }
                 return super.eventFilter(watched, event)
             }
-        })
+        }
+        scrollArea.installEventFilter(wheelFilter)
+        scrollArea.viewport()?.installEventFilter(wheelFilter)
+
+        refreshContentSize()
+        updateBorderStyle()
+        QTimer.singleShot(0) { updateOverflowState() }
     }
 
     fun addTab(icon: QIcon?, text: String): Int = insertTab(tabWidgets.size, icon, text)
@@ -153,6 +175,8 @@ class EditorTabBar(parent: QWidget? = null) : QWidget(parent) {
             content.repaint()
         }
 
+        refreshContentSize()
+        scheduleOverflowUpdate()
         return idx
     }
 
@@ -177,6 +201,8 @@ class EditorTabBar(parent: QWidget? = null) : QWidget(parent) {
         updateCloseVisibility()
         content.update()
         content.repaint()
+        refreshContentSize()
+        scheduleOverflowUpdate()
     }
 
     fun setTabIconAt(idx: Int, icon: QIcon?) {
@@ -241,9 +267,12 @@ class EditorTabBar(parent: QWidget? = null) : QWidget(parent) {
     }
 
     private fun showTabListMenu() {
+        val hiddenIndexes = hiddenTabIndexes()
+        if(hiddenIndexes.isEmpty()) return
+
         val menu = QMenu(this)
 
-        for(i in tabWidgets.indices) {
+        for(i in hiddenIndexes) {
             val tab = tabWidgets[i]
             val action = menu.addAction(tab.getText())!!
 
@@ -255,6 +284,19 @@ class EditorTabBar(parent: QWidget? = null) : QWidget(parent) {
         }
 
         menu.exec(dropdownBtn.mapToGlobal(QPoint(0, dropdownBtn.height)))
+    }
+
+    override fun resizeEvent(event: @Nullable QResizeEvent?) {
+        super.resizeEvent(event)
+        refreshContentSize()
+        scheduleOverflowUpdate()
+    }
+
+    override fun paintEvent(event: @Nullable QPaintEvent?) {
+        val painter = QPainter(this)
+        painter.fillRect(rect, QColor(TColors.Surface0))
+        painter.end()
+        super.paintEvent(event)
     }
 
     private var wheelAccumulator = 0
@@ -329,26 +371,121 @@ class EditorTabBar(parent: QWidget? = null) : QWidget(parent) {
     }
 
     private fun updateBorderStyle() {
+        val tabBarSurface = TColors.Surface0
+        val surfaceWithBottomBorder: StyleBuilder.() -> Unit = {
+            backgroundColor(tabBarSurface)
+            border()
+            border(borderWidth, borderColor, "bottom")
+            margin(0)
+            padding(0)
+        }
+
         styleSheet = qtStyle {
-            selector("QScrollArea") {
-                border(direction = "left", style = "none")
-                border(direction = "right", style = "none")
-                border(borderWidth, borderColor, "top", "solid")
-                border(borderWidth, borderColor, "bottom", "solid")
-                background("transparent")
+            selector("#editorTabBar") {
+                backgroundColor(tabBarSurface)
             }
-            selector("QToolButton") {
+            selector("#editorTabBarScroll", surfaceWithBottomBorder)
+            selector("#editorTabBarViewport") {
+                backgroundColor(tabBarSurface)
                 border()
-                padding(0)
                 margin(0)
+                padding(0)
+            }
+            selector("QScrollArea#editorTabBarScroll::corner") {
+                backgroundColor(tabBarSurface)
+                border()
+            }
+            selector("#editorTabBarContent") {
+                backgroundColor(tabBarSurface)
+                border()
+                margin(0)
+                padding(0)
+            }
+            selector("#editorTabBarDropdown", surfaceWithBottomBorder)
+            selector("#editorTabBarDropdown:hover") {
+                backgroundColor(tabBarSurface)
+            }
+            selector("#editorTabBarDropdown:pressed") {
+                backgroundColor(tabBarSurface)
             }
         }.toStyleSheet()
+        applyViewportSurface(scrollArea.viewport(), tabBarSurface)
+        content.styleSheet = ""
+        dropdownBtn.styleSheet = qtStyle {
+            selector("QToolButton", surfaceWithBottomBorder)
+            selector("QToolButton:hover") {
+                backgroundColor(tabBarSurface)
+            }
+            selector("QToolButton:pressed") {
+                backgroundColor(tabBarSurface)
+            }
+        }.toStyleSheet()
+    }
+
+    private fun applyViewportSurface(viewport: QWidget?, hex: String) {
+        val widget = viewport ?: return
+        val color = QColor(hex)
+        val palette = widget.palette()
+        palette.setColor(QPalette.ColorRole.Window, color)
+        palette.setColor(QPalette.ColorRole.Base, color)
+        widget.palette = palette
+        widget.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, true)
+        widget.autoFillBackground = true
+        widget.styleSheet = qtStyle {
+            selector("#editorTabBarViewport") {
+                backgroundColor(hex)
+                border()
+                margin(0)
+                padding(0)
+            }
+        }.toStyleSheet()
+    }
+
+    private fun hiddenTabIndexes(assumeDropdownHidden: Boolean = false): List<Int> {
+        if(tabWidgets.isEmpty()) return emptyList()
+        val sb = scrollArea.horizontalScrollBar() ?: return emptyList()
+        val viewport = scrollArea.viewport() ?: return emptyList()
+        if(viewport.width() <= 0) return emptyList()
+
+        contentLayout.activate()
+        content.adjustSize()
+
+        val extraWidth = if(assumeDropdownHidden && dropdownBtn.isVisible) dropdownBtn.width() else 0
+        val viewLeft = sb.value
+        val viewRight = viewLeft + viewport.width() + extraWidth
+
+        return tabWidgets.indices.filter { idx ->
+            val tabRect = tabWidgets[idx].geometry
+            val tabLeft = tabRect.x()
+            val tabRight = tabRect.x() + tabRect.width()
+            tabLeft < viewLeft || tabRight > viewRight
+        }
+    }
+
+    private fun updateOverflowState() {
+        val shouldShowDropdown = hiddenTabIndexes(assumeDropdownHidden = true).isNotEmpty()
+        val visibilityChanged = dropdownBtn.isVisible != shouldShowDropdown
+        dropdownBtn.isVisible = shouldShowDropdown
+        dropdownBtn.isEnabled = shouldShowDropdown
+        if(visibilityChanged) {
+            updateBorderStyle()
+            dropdownBtn.update()
+            dropdownBtn.repaint()
+            update()
+            repaint()
+        }
+    }
+
+    private fun scheduleOverflowUpdate() {
+        QTimer.singleShot(0) { updateOverflowState() }
     }
 
     val count: Int get() = tabWidgets.size
 
     fun setTabText(idx: Int, text: String) {
         tabWidgets.getOrNull(idx)?.setText(text)
+        refreshContentSize()
+        scheduleOverflowUpdate()
     }
 
     fun tabText(idx: Int): String? = tabWidgets.getOrNull(idx)?.getText()
@@ -358,4 +495,14 @@ class EditorTabBar(parent: QWidget? = null) : QWidget(parent) {
     fun allTabTexts(): List<String> = tabWidgets.map { it.getText() }
 
     fun findTabByText(text: String): Int = tabWidgets.indexOfFirst { it.getText() == text }
+
+    internal fun tabHeightPx(): Int = tabBarHeight
+
+    private fun refreshContentSize() {
+        contentLayout.activate()
+        content.adjustSize()
+        val widthHint = contentLayout.sizeHint().width().coerceAtLeast(0)
+        content.minimumWidth = widthHint
+        content.maximumWidth = 16777215
+    }
 }

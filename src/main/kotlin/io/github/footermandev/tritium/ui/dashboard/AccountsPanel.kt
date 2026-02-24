@@ -4,7 +4,7 @@ import io.github.footermandev.tritium.*
 import io.github.footermandev.tritium.accounts.AccountDescriptor
 import io.github.footermandev.tritium.accounts.AccountProvider
 import io.github.footermandev.tritium.accounts.ProfileMngr
-import io.github.footermandev.tritium.koin.getRegistry
+import io.github.footermandev.tritium.extension.core.BuiltinRegistries
 import io.github.footermandev.tritium.ui.helpers.runOnGuiThread
 import io.github.footermandev.tritium.ui.theme.qt.setStyle
 import io.github.footermandev.tritium.ui.theme.qt.setThemedStyle
@@ -248,7 +248,7 @@ class AccountsPanel internal constructor(): QWidget() {
         scope.launch {
             try {
                 val providers = try {
-                    val registry = getRegistry<AccountProvider>("core.account_provider")
+                    val registry = BuiltinRegistries.AccountProvider
                     logger.info("Registered account providers: ${registry.toListString()}")
                     registry.all()
                 } catch (t: Throwable) {

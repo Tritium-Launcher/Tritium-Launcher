@@ -2,6 +2,7 @@ package io.github.footermandev.tritium.ui.theme
 
 import io.qt.NonNull
 import io.qt.Nullable
+import io.qt.core.QObject
 import io.qt.core.QRectF
 import io.qt.core.Qt
 import io.qt.gui.*
@@ -37,6 +38,23 @@ class TritiumProxyStyle(style: QStyle?): QProxyStyle(style) {
         }
     }
 
+    private fun parseColor(value: Any?): QColor? {
+        return when (value) {
+            is QColor -> value
+            is String -> QColor(value)
+            else -> null
+        }
+    }
+
+    private fun findColorProperty(start: QObject?, key: String): QColor? {
+        var current = start
+        while (current != null) {
+            parseColor(current.property(key))?.let { return it }
+            current = current.parent()
+        }
+        return null
+    }
+
     override fun drawPrimitive(
         element: @NonNull PrimitiveElement,
         option: @Nullable QStyleOption?,
@@ -44,6 +62,17 @@ class TritiumProxyStyle(style: QStyle?): QProxyStyle(style) {
         widget: @Nullable QWidget?
     ) {
         if(widget != null && option != null && painter != null) {
+            if (
+                element == PrimitiveElement.PE_IndicatorDockWidgetResizeHandle ||
+                element == PrimitiveElement.PE_IndicatorToolBarSeparator
+            ) {
+                val fill = findColorProperty(widget, "sidebar.separatorColor")
+                    ?: ThemeMngr.getQColor("Surface1")
+                    ?: widget.palette().color(QPalette.ColorRole.Window)
+                painter.fillRect(option.rect, fill)
+                return
+            }
+
             if(drawBorder(widget, element, option, painter)) return
 
             if(element == PrimitiveElement.PE_FrameFocusRect) {
@@ -150,6 +179,18 @@ class TritiumProxyStyle(style: QStyle?): QProxyStyle(style) {
 
         p.restore()
         return true
+    }
+
+    override fun pixelMetric(
+        metric: @NonNull PixelMetric,
+        option: @Nullable QStyleOption?,
+        widget: @Nullable QWidget?
+    ): Int {
+        return when (metric) {
+            PixelMetric.PM_DockWidgetSeparatorExtent,
+            PixelMetric.PM_SplitterWidth -> 1
+            else -> super.pixelMetric(metric, option, widget)
+        }
     }
 
 

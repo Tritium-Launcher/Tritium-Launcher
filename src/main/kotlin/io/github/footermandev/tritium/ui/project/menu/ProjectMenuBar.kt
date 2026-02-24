@@ -119,7 +119,7 @@ class ProjectMenuBar : QWidget() {
         val btn = QPushButton(item.title)
         btn.isFlat = true
         btn.isEnabled = item.enabled
-        btn.toolTip = item.tooltip
+        btn.toolTip = item.tooltip.orEmpty()
         btn.clicked.connect {
             try {
                 val ctx = MenuActionContext(project, window, selection, item.meta)
@@ -141,7 +141,7 @@ class ProjectMenuBar : QWidget() {
         val btn = QToolButton()
         btn.text = item.title
         btn.isEnabled = item.enabled
-        btn.toolTip = item.tooltip
+        btn.toolTip = item.tooltip.orEmpty()
         btn.popupMode = QToolButton.ToolButtonPopupMode.InstantPopup
 
         val menu = QMenu(window)

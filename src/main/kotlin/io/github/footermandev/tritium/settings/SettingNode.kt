@@ -46,6 +46,7 @@ data class SettingNode<T>(
      */
     fun addChild(child: SettingNode<*>, enableWhen: (T) -> Boolean = { true }) {
         childrenList += SettingChildLink(child) { parentValue ->
+            @Suppress("UNCHECKED_CAST")
             val typed = parentValue as? T ?: return@SettingChildLink false
             enableWhen(typed)
         }

@@ -76,6 +76,12 @@ private fun registerDirToService(dir: Path, service: WatchService, kinds: List<W
     return dir.register(service, kinds.toTypedArray())
 }
 
+@Suppress("UNCHECKED_CAST")
+private fun asPathEvent(event: WatchEvent<*>): WatchEvent<Path>? = event as? WatchEvent<Path>
+
+@Suppress("UNCHECKED_CAST")
+private fun asPathKind(kind: WatchEvent.Kind<*>): WatchEvent.Kind<Path> = kind as WatchEvent.Kind<Path>
+
 fun VPath.watch(
     callback: (VWatchEvent) -> Unit,
     options: VWatchOptions = VWatchOptions(),
@@ -128,9 +134,9 @@ fun VPath.watch(
                 val watchedBaseV = registered[key] ?: this@watch.toAbsolute()
 
                 for(e in key.pollEvents()) {
-                    val ePath = e as? WatchEvent<Path>
+                    val ePath = asPathEvent(e)
                     val kind = e.kind()
-                    val ve = VWatchEvent.fromWatchEvent(kind as WatchEvent.Kind<Path>, watchedBaseV, ePath)
+                    val ve = VWatchEvent.fromWatchEvent(asPathKind(kind), watchedBaseV, ePath)
                     try {
                         callback(ve)
                     } catch (t: Throwable) {
@@ -197,10 +203,9 @@ fun VPath.watchAsFlow(options: VWatchOptions = VWatchOptions()): Flow<VWatchEven
                 val base = registered[key] ?: this@watchAsFlow.toAbsolute()
 
                 for (ev in key.pollEvents()) {
-                    @Suppress("UNCHECKED_CAST")
-                    val evPath = ev as? WatchEvent<Path>
+                    val evPath = asPathEvent(ev)
                     val kind = ev.kind()
-                    val vpe = VWatchEvent.fromWatchEvent(kind as WatchEvent.Kind<Path>, base, evPath)
+                    val vpe = VWatchEvent.fromWatchEvent(asPathKind(kind), base, evPath)
 
                     try {
                         trySend(vpe).isSuccess
