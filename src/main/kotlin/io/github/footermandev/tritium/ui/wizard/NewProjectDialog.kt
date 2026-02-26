@@ -259,7 +259,7 @@ class NewProjectDialog internal constructor(parent: QWidget? = null): QDialog(pa
         closeAfterCancel = false
         pendingProjectRoot = inferProjectRoot(vars)
         pendingProjectRootExisted = pendingProjectRoot?.exists() == true
-        logger.info("Starting create for type={} vars={}", typeId, vars)
+        logger.info("Starting create for type={} ({} input vars)", typeId, vars.size)
 
         statusLabel.text = "Creating Project..."
         createButton.isEnabled = false
@@ -268,14 +268,14 @@ class NewProjectDialog internal constructor(parent: QWidget? = null): QDialog(pa
 
         currentJob = creator.createProjectAsync(type, vars, onProgress = progress@{ msg ->
             if (activeToken != runToken) {
-                logger.debug("Ignoring stale project generation progress for token={}", activeToken)
+                logger.debug("Ignoring stale project generation progress for runId={}", activeToken)
                 return@progress
             }
             logger.info("Project generation progress: {}", msg)
             statusLabel.text = msg
         }, onComplete = complete@{ result ->
             if (activeToken != runToken) {
-                logger.info("Ignoring stale project generation completion for token={}", activeToken)
+                logger.info("Ignoring stale project generation completion for runId={}", activeToken)
                 return@complete
             }
             logger.info("Project generation onComplete invoked (success? {})", result.isSuccess)
@@ -304,7 +304,7 @@ class NewProjectDialog internal constructor(parent: QWidget? = null): QDialog(pa
                 }
                 logger.info(
                     "Project generation cancelled (cleanupRoot={}, removedMalformed={})",
-                    cleanupRoot,
+                    cleanupRoot?.toString()?.redactUserPath(),
                     cleaned
                 )
                 if (shouldCloseAfterCancel) finishDialog(accepted = false)
@@ -320,14 +320,14 @@ class NewProjectDialog internal constructor(parent: QWidget? = null): QDialog(pa
                     }
 
                     statusLabel.text = "Project created: ${res.projectRoot}"
-                    logger.info("Project template success: {}", res.projectRoot)
+                    logger.info("Project template success: {}", res.projectRoot.redactUserPath())
                     val projectDir = VPath.get(res.projectRoot)
                     val project = try {
                         ProjectMngr.loadProject(projectDir)
                             ?: ProjectMngr.refreshProjects(ProjectMngr.RefreshSource.BACKGROUND)
                                 .find { it.projectDir.toAbsolute() == projectDir.toAbsolute() }
                     } catch (t: Throwable) {
-                        logger.warn("Failed to load newly created project from {}", projectDir, t)
+                        logger.warn("Failed to load newly created project from {}", projectDir.toString().redactUserPath(), t)
                         null
                     }
 

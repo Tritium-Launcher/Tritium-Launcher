@@ -36,7 +36,6 @@ dependencies {
     implementation(libs.kotlinx.serialization.json)
     implementation(libs.kotlinx.serialization.hocon)
     implementation(libs.kotlinx.coroutines.core)
-    implementation("io.ktor:ktor-client-cio-jvm:3.3.1")
 
     // KSP
     ksp(libs.autoservice.ksp)
@@ -62,6 +61,7 @@ dependencies {
     implementation(ktor.client.logging)
     implementation(ktor.client.content.negotiation)
     implementation(ktor.client.serialization)
+    implementation(ktor.client.websockets)
     implementation(ktor.serialization.kotlinx.json)
 
     implementation(ktor.server.core)

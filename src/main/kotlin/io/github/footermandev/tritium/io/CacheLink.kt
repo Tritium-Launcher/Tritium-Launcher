@@ -1,19 +1,24 @@
 package io.github.footermandev.tritium.io
 
 import java.nio.file.Files
+import java.util.jar.JarFile
 
 /**
  * Materialize [cache] into [dest] using a symlink when possible, falling back to a copy.
  */
 fun linkOrCopyFromCache(cache: VPath, dest: VPath): Boolean {
     if (!cache.exists()) return false
-    val cacheSize = cache.sizeOrNull() ?: 0L
-    if (cacheSize <= 0L) return false
+    if (!isUsableCachedArtifact(cache)) {
+        try {
+            cache.delete()
+        } catch (_: Throwable) {
+        }
+        return false
+    }
 
     val destPath = dest.toJPath()
     if (Files.exists(destPath)) {
-        val destSize = dest.sizeOrNull() ?: 0L
-        if (destSize > 0L) return true
+        if (isUsableCachedArtifact(dest)) return true
     }
 
     if (Files.isSymbolicLink(destPath)) {
@@ -31,13 +36,29 @@ fun linkOrCopyFromCache(cache: VPath, dest: VPath): Boolean {
     dest.parent().mkdirs()
     return try {
         Files.createSymbolicLink(destPath, cache.toJPath())
-        true
+        isUsableCachedArtifact(dest)
     } catch (_: Throwable) {
         try {
             dest.writeBytes(cache.bytesOrNothing())
-            true
+            isUsableCachedArtifact(dest)
         } catch (_: Throwable) {
             false
         }
+    }
+}
+
+private fun isUsableCachedArtifact(path: VPath): Boolean {
+    if (!path.exists()) return false
+    val size = path.sizeOrNull() ?: return false
+    if (size <= 0L) return false
+
+    if (!path.fileName().endsWith(".jar", ignoreCase = true)) {
+        return true
+    }
+
+    return try {
+        JarFile(path.toJFile()).use { true }
+    } catch (_: Throwable) {
+        false
     }
 }

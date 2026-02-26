@@ -606,6 +606,24 @@ private class ListStyle(private val ctx: ProjectStyleContext) : ProjectListStyle
             if (project.isInvalidCatalogProject()) return@connect
             ctx.openProject(project)
         }
+        list.contextMenuPolicy = Qt.ContextMenuPolicy.CustomContextMenu
+        list.customContextMenuRequested.connect { pos ->
+            val viewport = list.viewport() ?: return@connect
+            val viewportPos = viewport.mapFrom(list, pos)
+            val item = list.itemAt(viewportPos) ?: return@connect
+            val project = item.data(Qt.ItemDataRole.UserRole) as? ProjectBase ?: return@connect
+            if (!project.isInvalidCatalogProject()) return@connect
+            list.setCurrentItem(item)
+
+            val menu = QMenu(list).apply {
+                separatorsCollapsible = true
+                applyMenuStyle(this)
+            }
+            menu.addAction("Hide Invalid Project")?.triggered?.connect {
+                ctx.hideInvalidProject(project)
+            }
+            menu.exec(viewport.mapToGlobal(viewportPos))
+        }
         list.setItemDelegate(ListRowDelegate())
     }
 
@@ -788,6 +806,14 @@ private class ProjectTile(
             separatorsCollapsible = true
             applyMenuStyle(this)
         }
+        if (project.isInvalidCatalogProject()) {
+            menu.addAction("Hide Invalid Project")?.triggered?.connect {
+                ctx.hideInvalidProject(project)
+            }
+            menu.exec(pos)
+            return
+        }
+
         val groups = ctx.groupStore.groupNames()
         val assign = menu.addMenu("Move to group")
         assign?.addAction("Ungroup")?.triggered?.connect {
@@ -995,6 +1021,11 @@ private class DraggableTile(
     override fun mousePressEvent(event: QMouseEvent?) {
         super.mousePressEvent(event)
         if (event == null) return
+        if (event.button() == Qt.MouseButton.RightButton && project.isInvalidCatalogProject()) {
+            showContextMenu(event.globalPosition().toPoint())
+            event.accept()
+            return
+        }
         if (event.button() == Qt.MouseButton.LeftButton &&
             event.modifiers().value() == Qt.KeyboardModifier.ShiftModifier.value()) {
             dragging = true
@@ -1006,6 +1037,17 @@ private class DraggableTile(
             applySelectionStyle()
             event.accept()
         }
+    }
+
+    private fun showContextMenu(pos: QPoint) {
+        val menu = QMenu(this).apply {
+            separatorsCollapsible = true
+            applyMenuStyle(this)
+        }
+        menu.addAction("Hide Invalid Project")?.triggered?.connect {
+            ctx.hideInvalidProject(project)
+        }
+        menu.exec(pos)
     }
 
     override fun mouseDoubleClickEvent(event: QMouseEvent?) {

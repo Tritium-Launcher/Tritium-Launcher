@@ -116,7 +116,7 @@ object ProfileMngr {
                     profiles[homeAccountId] = profile
                     tokens[homeAccountId] = token
                     saveProfileToDisk(homeAccountId, profile)
-                    logger.info("Cached MC profile for account $homeAccountId (${profile.name})")
+                    logger.info("Cached MC profile for account (${profile.name})")
                 } else logger.error("Failed to fetch MC profile for account $homeAccountId during init")
             } catch (e: Exception) {
                 logger.error("Exception while fetching MC profile for account $homeAccountId", e)
@@ -199,7 +199,7 @@ object ProfileMngr {
             }
             val body = response.bodyAsText()
             if (response.status != HttpStatusCode.OK) {
-                logger.error("Failed to fetch profile: HTTP ${response.status.value} - ${body.take(300)}")
+                logger.error("Failed to fetch profile: HTTP {}", response.status.value)
                 null
             } else {
                 json.decodeFromString(MCProfile.serializer(), body)

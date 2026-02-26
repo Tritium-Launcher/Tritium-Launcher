@@ -39,6 +39,7 @@ import kotlin.time.Duration.Companion.seconds
 private const val CLIENT_ID     = "Ov23liYVqUaH4MPQ0mMH"
 private val OAUTH_SCOPE         = listOf("repo", "read:org", "gist", "read:user")
 
+//TODO: GH Auth isn't finished or being used yet, needs encryption.
 private const val PREF_NODE = "io.github.footermandev.tritium.gh"
 private const val TOKEN_KEY = "github_access_token"
 

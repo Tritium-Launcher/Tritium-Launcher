@@ -155,6 +155,12 @@ internal object CoreSettings {
             allowForeignSettings = true
         }
 
+        val companionBridge = category("companion_bridge") {
+            title = "Companion Bridge"
+            parent = projects
+            allowForeignSettings = true
+        }
+
         val javaRuntime = category("java_runtime") {
             title = "Java Runtime"
             parent = projects
@@ -218,6 +224,26 @@ internal object CoreSettings {
             widgetFactory = { ctx -> WindowSizeWidget(ctx, "1280x720") }
         }
         gameMaximized.addChild(gameResolution) { maximized -> !maximized }
+
+        text(companionBridge.path, "companion.ws.host") {
+            title = "Companion Websocket Host"
+            description = "Host Tritium connects to for Companion websocket commands."
+            defaultValue = "127.0.0.1"
+            placeholder = "127.0.0.1"
+            comments = listOf(
+                "Use 127.0.0.1 for local game sessions."
+            )
+        }
+
+        text(companionBridge.path, "companion.ws.port") {
+            title = "Companion Websocket Port"
+            description = "Port used for websocket commands between Tritium and the Companion mod."
+            defaultValue = "38765"
+            placeholder = "38765"
+            comments = listOf(
+                "Must match the port used by the Companion mod."
+            )
+        }
 
         widget(javaRuntime.path, "java.path.8") {
             title = "Java 8 Path"

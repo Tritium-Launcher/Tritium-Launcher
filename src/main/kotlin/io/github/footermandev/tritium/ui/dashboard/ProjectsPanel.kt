@@ -218,7 +218,7 @@ class ProjectsPanel internal constructor(): QWidget(), ProjectMngrListener {
             startDir,
             "Tritium Project (trproj.json);;JSON Files (*.json);;All Files (*)"
         )
-        val selectedPath = chosen?.result?.trim().orEmpty()
+        val selectedPath = chosen.result?.trim().orEmpty()
         if (selectedPath.isBlank()) return
 
         importProjectFromSelection(VPath.get(selectedPath))
@@ -441,8 +441,10 @@ class ProjectsPanel internal constructor(): QWidget(), ProjectMngrListener {
                 this::openProject,
                 layoutStore,
                 groupStore,
-                this::requestRefresh
-            ) { styleControls.isVisible }
+                this::requestRefresh,
+                { styleControls.isVisible },
+                this::hideInvalidProjectFromList
+            )
 
             val style = provider.create(ctx)
             styleInstances[id] = style
@@ -563,5 +565,34 @@ class ProjectsPanel internal constructor(): QWidget(), ProjectMngrListener {
     /** Forces a refresh of the active style layout. */
     private fun requestRefresh() {
         applyFilter(immediate = true)
+    }
+
+    /**
+     * Removes an invalid catalog project entry after explicit user confirmation.
+     *
+     * This only edits `projects/catalog.json` and refreshes the dashboard list.
+     */
+    private fun hideInvalidProjectFromList(project: ProjectBase) {
+        if (project.typeId != ProjectMngr.INVALID_CATALOG_PROJECT_TYPE) return
+        if (!confirmHideInvalidProject(project)) return
+
+        val removed = ProjectMngr.removeProjectFromCatalog(project.projectDir)
+        if (!removed) {
+            Dashboard.logger.warn("Failed to remove invalid project '{}' from catalog", project.name)
+            return
+        }
+        scheduleRefresh()
+    }
+
+    private fun confirmHideInvalidProject(project: ProjectBase): Boolean {
+        val box = QMessageBox(this)
+        box.icon = QMessageBox.Icon.Question
+        box.windowTitle = "Hide Invalid Project"
+        box.text = "Hide '${project.name}' from the project list?"
+        box.informativeText = "This will only hide the project from the list"
+        val hideButton = box.addButton("Hide", QMessageBox.ButtonRole.AcceptRole)
+        box.addButton(QMessageBox.StandardButton.Cancel)
+        box.exec()
+        return box.clickedButton() == hideButton
     }
 }

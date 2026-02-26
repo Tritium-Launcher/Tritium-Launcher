@@ -26,7 +26,8 @@ data class ProjectStyleContext(
     val layoutStore: LayoutStore,
     val groupStore: GroupStore,
     val requestRefresh: () -> Unit,
-    val controlsVisible: () -> Boolean = { false }
+    val controlsVisible: () -> Boolean = { false },
+    val hideInvalidProject: (ProjectBase) -> Unit = {}
 )
 
 /** Context passed to sort options for accessing style-related data. */

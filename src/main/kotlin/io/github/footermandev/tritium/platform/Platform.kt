@@ -19,12 +19,7 @@ enum class Platform {
         val version: String = System.getProperty("os.version", "unknown")
         val arch: String = System.getProperty("os.arch", "unknown")
 
-        val current = when(name.lowercase()) {
-            "windows" -> Windows
-            "mac"     -> MacOSX
-            "linux"   -> Linux
-            else      -> Unknown
-        }
+        val current = detectCurrentPlatform(name)
 
         val isWindows = current == Windows
         val isMacOS   = current == MacOSX
@@ -75,17 +70,22 @@ enum class Platform {
 
         private fun runAndLogProcess(cmd: List<String>): Boolean {
             try {
-                mainLogger.info("Running: ${cmd.joinToString(" ")}")
+                val commandName = cmd.firstOrNull().orEmpty()
+                mainLogger.info("Running external command: {}", commandName)
                 val pb = ProcessBuilder(cmd)
                 pb.redirectErrorStream(true)
                 val proc = pb.start()
                 val output = proc.inputStream.bufferedReader().readText()
                 val finished = proc.waitFor(5, TimeUnit.SECONDS)
                 val exit = if(finished) proc.exitValue() else -1
-                mainLogger.info("Exit code: $exit; output: $output")
+                mainLogger.info("External command '{}' exited with code {}", commandName, exit)
+                if (exit != 0 && output.isNotBlank()) {
+                    mainLogger.debug("External command '{}' returned output ({} chars)", commandName, output.length)
+                }
                 return exit == 0
             } catch (e: IOException) {
-                mainLogger.warn("Exception running ${cmd.joinToString(" ")}", e)
+                val commandName = cmd.firstOrNull().orEmpty()
+                mainLogger.warn("Exception running external command '{}'", commandName, e)
                 return false
             }
         }
@@ -98,14 +98,32 @@ enum class Platform {
             logger.info("=== SYSTEM ===")
         }
 
+        /**
+         * Resolve the current platform from [osName]
+         */
+        private fun detectCurrentPlatform(osName: String?): Platform {
+            val normalized = osName.orEmpty().trim().lowercase()
+            return when {
+                normalized.startsWith("windows") -> Windows
+                normalized.startsWith("mac")
+                        || normalized.contains("os x")
+                        || normalized.contains("darwin") -> MacOSX
+                normalized.startsWith("linux")
+                        || normalized.contains("nix")
+                        || normalized.contains("nux")
+                        || normalized.contains("aix") -> Linux
+                else -> Unknown
+            }
+        }
+
         fun String.redactUserHome(): String = replace(userHome, "~/")
         fun String.redactUserName(): String = replace(userName, "****")
     }
 
     override fun toString(): String {
-        return when(current) {
+        return when(this) {
             Windows -> "Windows"
-            MacOSX   -> "MacOSX"
+            MacOSX  -> "MacOSX"
             Linux   -> "Linux"
             Unknown -> "Unknown"
         }

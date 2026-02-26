@@ -7,6 +7,7 @@ import io.github.footermandev.tritium.core.project.templates.generation.StepExec
 import io.github.footermandev.tritium.io.VPath
 import io.github.footermandev.tritium.io.atomicWrite
 import io.github.footermandev.tritium.logger
+import io.github.footermandev.tritium.redactUserPath
 import io.github.footermandev.tritium.toURI
 import io.ktor.client.*
 import io.ktor.client.call.*
@@ -57,7 +58,7 @@ class FetchStep(
     override suspend fun execute(ctx: GeneratorContext): StepExecutionResult = withContext(Dispatchers.IO) {
         val resolvedDest = resolvePath(ctx, dest)
         try {
-            ctx.logger.info("Fetching $url -> $resolvedDest")
+            ctx.logger.info("Fetching resource into {}", resolvedDest.toString().redactUserPath())
             resolvedDest.parent().mkdirs()
 
             val uri = try { url.toURI() } catch (_: Exception) { null }
@@ -70,7 +71,7 @@ class FetchStep(
             if(uri?.scheme == "file" || (uri == null && localPath?.exists() == true)) {
                 try {
                     val srcPath = localPath ?: return@withContext StepExecutionResult(id, type, success = false, message = "Invalid local path")
-                    ctx.logger.info("Copying local file $srcPath -> $resolvedDest")
+                    ctx.logger.info("Copying local file into {}", resolvedDest.toString().redactUserPath())
                     val bytes = srcPath.bytesOrNull()
                         ?: return@withContext StepExecutionResult(id, type, success = false, message = "Failed to read local file")
                     atomicWrite(resolvedDest, bytes)
@@ -83,7 +84,7 @@ class FetchStep(
                         createdFiles = listOf(resolvedDest.toString())
                     )
                 } catch (t: Throwable) {
-                    ctx.logger.error("Local file copy failed: $url -> $resolvedDest", t)
+                    ctx.logger.error("Local file copy failed for {}", resolvedDest.toString().redactUserPath(), t)
                     return@withContext StepExecutionResult(id, type, false, t.message)
                 }
             }
@@ -99,11 +100,11 @@ class FetchStep(
                     createdFiles = listOf(resolvedDest.toString())
                 )
             } catch (t: Throwable) {
-                ctx.logger.error("Fetch failed: $url -> $dest", t)
+                ctx.logger.error("Fetch failed for destination {}", resolvedDest.toString().redactUserPath(), t)
                 return@withContext StepExecutionResult(id, type, success = false, message = t.message)
             }
         } catch (t: Throwable) {
-            logger.error("Fetch step unexpected failure: $url -> $dest", t)
+            logger.error("Fetch step unexpected failure for destination {}", resolvedDest.toString().redactUserPath(), t)
             StepExecutionResult(id, type, success = false, message = t.message)
         }
     }
@@ -288,8 +289,12 @@ class RunCommandStep(
     override suspend fun execute(ctx: GeneratorContext): StepExecutionResult = withContext(Dispatchers.IO) {
         try {
             val workingDir = VPath.parse(ctx.workingDir.toString())
-            ctx.logger.info("Running command: $command in $workingDir")
-            val procBuilder = ProcessBuilder(parseCommand(command))
+            val parsed = parseCommand(command)
+            ctx.logger.info(
+                "Running command in {}",
+                workingDir.toString().redactUserPath()
+            )
+            val procBuilder = ProcessBuilder(parsed)
                 .directory(workingDir.toJFile())
                 .redirectErrorStream(true)
             val proc = procBuilder.start()

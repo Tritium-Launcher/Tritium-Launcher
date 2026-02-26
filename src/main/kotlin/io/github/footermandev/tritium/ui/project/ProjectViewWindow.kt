@@ -7,6 +7,7 @@ import io.github.footermandev.tritium.extension.core.BuiltinRegistries
 import io.github.footermandev.tritium.extension.core.CoreSettingValues
 import io.github.footermandev.tritium.io.VPath
 import io.github.footermandev.tritium.logger
+import io.github.footermandev.tritium.platform.GameLauncher
 import io.github.footermandev.tritium.registry.DeferredRegistryBuilder
 import io.github.footermandev.tritium.ui.helpers.runOnGuiThread
 import io.github.footermandev.tritium.ui.notifications.NotificationLink
@@ -85,6 +86,7 @@ class ProjectViewWindow internal constructor(
     private lateinit var notificationOverlay: Toaster
 
     private var uiState: ProjectUIState = loadState()
+    private var unsubscribeGameProcessListener: (() -> Unit)? = null
 
     private val menuItemsRegistry = BuiltinRegistries.MenuItem
 
@@ -102,6 +104,18 @@ class ProjectViewWindow internal constructor(
             runOnGuiThread {
                 menuBarBuilder.rebuildFor(this, project, null)
             }
+        }
+
+        unsubscribeGameProcessListener = GameLauncher.addGameProcessListener {
+            runOnGuiThread {
+                if (!isVisible) return@runOnGuiThread
+                rebuildMenus()
+            }
+        }
+
+        destroyed.connect {
+            unsubscribeGameProcessListener?.invoke()
+            unsubscribeGameProcessListener = null
         }
     }
 

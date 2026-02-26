@@ -21,6 +21,8 @@ internal object CoreSettingKeys {
     val JavaPath17: NamespacedId = NamespacedId("tritium", "java.path.17")
     val JavaPath21: NamespacedId = NamespacedId("tritium", "java.path.21")
     val JavaPath25: NamespacedId = NamespacedId("tritium", "java.path.25")
+    val CompanionWsHost: NamespacedId = NamespacedId("tritium", "companion.ws.host")
+    val CompanionWsPort: NamespacedId = NamespacedId("tritium", "companion.ws.port")
 }
 
 /**
@@ -94,6 +96,26 @@ internal object CoreSettingValues {
         21 -> javaPath21()
         25 -> javaPath25()
         else -> null
+    }
+
+    /**
+     * Hostname used by Tritium when connecting to the Companion websocket.
+     */
+    fun companionWsHost(): String =
+        readOptionalText(CoreSettingKeys.CompanionWsHost) ?: "127.0.0.1"
+
+    /**
+     * Port used by Tritium and the Companion websocket bridge.
+     */
+    fun companionWsPort(): Int {
+        val fallback = 38765
+        val raw = readOptionalText(CoreSettingKeys.CompanionWsPort) ?: return fallback
+        val parsed = raw.toIntOrNull()
+        if (parsed == null || parsed !in 1..65535) {
+            logger.warn("Invalid websocket port '{}' for {}. Falling back to {}", raw, CoreSettingKeys.CompanionWsPort, fallback)
+            return fallback
+        }
+        return parsed
     }
 
     private fun parseWindowSize(key: NamespacedId, fallbackWidth: Int, fallbackHeight: Int): Pair<Int, Int> {

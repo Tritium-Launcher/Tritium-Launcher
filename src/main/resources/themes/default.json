@@ -76,6 +76,7 @@
     "file/lock_file": "icons/file/lock_file.svg",
     "file/region_file": "icons/file/region_file.svg",
     "file/powershell": "icons/file/powershell.svg",
+    "file/log": "icons/file/log.svg",
 
     "ui/tritium": "icons/ui/tritium.svg",
     "ui/curseforge": "icons/ui/curseforge.svg",
@@ -102,7 +103,8 @@
     "dashboard/microsoft": "icons/dashboard/microsoft.svg",
     "dashboard/small_grass": "icons/dashboard/small_grass.svg",
 
-    "menu/build": "icons/menu/build.svg",
-    "menu/run": "icons/menu/run.svg"
+    "menu/run": "icons/menu/run.svg",
+    "menu/rerun": "icons/menu/rerun.svg",
+    "menu/stop": "icons/menu/stop.svg"
   }
 }

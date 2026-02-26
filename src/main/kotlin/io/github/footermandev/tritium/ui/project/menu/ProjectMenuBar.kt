@@ -4,6 +4,9 @@ import io.github.footermandev.tritium.connect
 import io.github.footermandev.tritium.core.project.ProjectBase
 import io.github.footermandev.tritium.extension.core.BuiltinRegistries
 import io.github.footermandev.tritium.logger
+import io.github.footermandev.tritium.m
+import io.github.footermandev.tritium.ui.theme.TColors
+import io.github.footermandev.tritium.ui.theme.qt.setThemedStyle
 import io.github.footermandev.tritium.ui.widgets.constructor_functions.hBoxLayout
 import io.qt.gui.QAction
 import io.qt.widgets.*
@@ -22,8 +25,50 @@ class ProjectMenuBar : QWidget() {
     private val logger = logger()
 
     private val layout = hBoxLayout(this) {
-        widgetSpacing = 6
-        setContentsMargins(6, 2, 6, 2)
+        widgetSpacing = 0
+        contentsMargins = 0.m
+    }
+
+    init {
+        objectName = "projectMenuBar"
+        setThemedStyle {
+            selector("#projectMenuBar") {
+                backgroundColor(TColors.Surface0)
+                border()
+            }
+
+            selector("#projectMenuBar QPushButton, #projectMenuBar QToolButton") {
+                backgroundColor("transparent")
+                color(TColors.Text)
+                border()
+                minHeight(22)
+            }
+
+            selector("#projectMenuBar QPushButton:hover, #projectMenuBar QToolButton:hover") {
+                backgroundColor(TColors.Surface1)
+            }
+
+            selector("#projectMenuBar QPushButton:pressed, #projectMenuBar QToolButton:pressed") {
+                backgroundColor(TColors.Surface2)
+            }
+
+            selector("#projectMenuBar QPushButton:disabled, #projectMenuBar QToolButton:disabled") {
+                color(TColors.Subtext)
+                backgroundColor("transparent")
+            }
+
+            selector("#projectMenuBar QPushButton[menuIconOnly=\"true\"]") {
+                minWidth(26)
+                maxWidth(26)
+            }
+
+            // Hide the default drop-down indicator on top-level menu buttons.
+            selector("#projectMenuBar QToolButton::menu-indicator") {
+                any("image", "none")
+                any("width", "0px")
+                any("height", "0px")
+            }
+        }
     }
 
     fun attach(window: QMainWindow) {
@@ -54,14 +99,16 @@ class ProjectMenuBar : QWidget() {
                 }
                 val subK = children[k.id]
                 val hasChildren = !subK.isNullOrEmpty()
+                val ctx = MenuActionContext(project, window, selection, k.meta)
                 val action = QAction(k.title, window)
-                action.isEnabled = k.enabled
+                k.resolveIcon(ctx)?.let { action.icon = it }
+                action.isEnabled = k.isEnabled(ctx)
                 k.shortcut?.let { sc -> action.setShortcut(sc) }
                 k.tooltip?.let { action.toolTip = it }
                 action.triggered.connect {
                     try {
-                        val ctx = MenuActionContext(project, window, selection, k.meta)
-                        k.action?.invoke(ctx)
+                        val actionCtx = MenuActionContext(project, window, selection, k.meta)
+                        k.action?.invoke(actionCtx)
                     } catch (t: Throwable) {
                         logger.warn("Menu action '{}' failed", k.id, t)
                     }
@@ -79,33 +126,48 @@ class ProjectMenuBar : QWidget() {
         }
 
         val topSorted = roots.sortedWith(compareBy({ it.order }, { it.title }))
-        for (top in topSorted) {
-            if (!top.visible) continue
-            when (top.kind) {
-                MenuItemKind.WIDGET -> {
-                    val ctx = MenuActionContext(project, window, selection, top.meta)
-                    val widget = top.widgetFactory?.invoke(ctx)
-                    if (widget != null) {
-                        layout.addWidget(widget)
-                    }
-                }
+        val leftItems = topSorted.filterNot { isRightAligned(it) }
+        val rightItems = topSorted.filter { isRightAligned(it) }
 
-                MenuItemKind.ACTION -> {
-                    layout.addWidget(makeActionButton(window, top, project, selection))
-                }
+        leftItems.forEach { top ->
+            addTopItem(window, top, children, project, selection)
+        }
+        layout.addStretch(1)
+        rightItems.forEach { top ->
+            addTopItem(window, top, children, project, selection)
+        }
+        update()
+    }
 
-                MenuItemKind.MENU -> {
-                    layout.addWidget(makeMenuButton(window, top, children, project, selection))
-                }
-
-                MenuItemKind.SEPARATOR -> {
-                    layout.addWidget(makeSeparator())
+    private fun addTopItem(
+        window: QMainWindow,
+        top: MenuItem,
+        children: Map<String, List<MenuItem>>,
+        project: ProjectBase?,
+        selection: Any?
+    ) {
+        if (!top.visible) return
+        when (top.kind) {
+            MenuItemKind.WIDGET -> {
+                val ctx = MenuActionContext(project, window, selection, top.meta)
+                val widget = top.widgetFactory?.invoke(ctx)
+                if (widget != null) {
+                    layout.addWidget(widget)
                 }
             }
-        }
 
-        layout.addStretch(1)
-        update()
+            MenuItemKind.ACTION -> {
+                layout.addWidget(makeActionButton(window, top, project, selection))
+            }
+
+            MenuItemKind.MENU -> {
+                layout.addWidget(makeMenuButton(window, top, children, project, selection))
+            }
+
+            MenuItemKind.SEPARATOR -> {
+                layout.addWidget(makeSeparator())
+            }
+        }
     }
 
     private fun makeSeparator(): QWidget {
@@ -115,11 +177,20 @@ class ProjectMenuBar : QWidget() {
         return sep
     }
 
+    private fun isRightAligned(item: MenuItem): Boolean =
+        item.meta["align"]?.equals("right", ignoreCase = true) == true
+
     private fun makeActionButton(window: QMainWindow, item: MenuItem, project: ProjectBase?, selection: Any?): QPushButton {
-        val btn = QPushButton(item.title)
+        val baseCtx = MenuActionContext(project, window, selection, item.meta)
+        val iconOnly = item.meta["iconOnly"]?.equals("true", ignoreCase = true) == true
+        val btn = QPushButton(if (iconOnly) "" else item.title)
         btn.isFlat = true
-        btn.isEnabled = item.enabled
+        btn.isEnabled = item.isEnabled(baseCtx)
         btn.toolTip = item.tooltip.orEmpty()
+        item.resolveIcon(baseCtx)?.let { btn.icon = it }
+        if (iconOnly) {
+            btn.setProperty("menuIconOnly", true)
+        }
         btn.clicked.connect {
             try {
                 val ctx = MenuActionContext(project, window, selection, item.meta)
@@ -138,10 +209,12 @@ class ProjectMenuBar : QWidget() {
         project: ProjectBase?,
         selection: Any?
     ): QToolButton {
+        val baseCtx = MenuActionContext(project, window, selection, item.meta)
         val btn = QToolButton()
         btn.text = item.title
-        btn.isEnabled = item.enabled
+        btn.isEnabled = item.isEnabled(baseCtx)
         btn.toolTip = item.tooltip.orEmpty()
+        item.resolveIcon(baseCtx)?.let { btn.icon = it }
         btn.popupMode = QToolButton.ToolButtonPopupMode.InstantPopup
 
         val menu = QMenu(window)
@@ -169,7 +242,8 @@ class ProjectMenuBar : QWidget() {
         // Allow top-level action for menu button
         if (item.action != null) {
             val act = QAction(item.title, window)
-            act.isEnabled = item.enabled
+            item.resolveIcon(baseCtx)?.let { act.icon = it }
+            act.isEnabled = item.isEnabled(baseCtx)
             item.shortcut?.let { act.setShortcut(it) }
             act.triggered.connect {
                 try {
@@ -210,14 +284,16 @@ class ProjectMenuBar : QWidget() {
             return
         }
 
+        val ctx = MenuActionContext(project, window, selection, item.meta)
         val act = QAction(item.title, window)
-        act.isEnabled = item.enabled
+        item.resolveIcon(ctx)?.let { act.icon = it }
+        act.isEnabled = item.isEnabled(ctx)
         item.shortcut?.let { act.setShortcut(it) }
         item.tooltip?.let { act.toolTip = it }
         act.triggered.connect {
             try {
-                val ctx = MenuActionContext(project, window, selection, item.meta)
-                item.action?.invoke(ctx)
+                val actionCtx = MenuActionContext(project, window, selection, item.meta)
+                item.action?.invoke(actionCtx)
             } catch (t: Throwable) {
                 logger.warn("Menu action '{}' failed", item.id, t)
             }

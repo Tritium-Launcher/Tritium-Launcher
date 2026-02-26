@@ -190,6 +190,33 @@ fun formatDurationMs(totalMs: Long): String {
     }
 }
 
+/**
+ * Redacts the local user-home prefix to "~/".
+ */
+fun String.redactUserPath(): String {
+    val home = System.getProperty("user.home")?.trim().orEmpty().trimEnd('/', '\\')
+    if (home.isEmpty()) return this
+
+    val variants = linkedSetOf(
+        home,
+        home.replace('\\', '/'),
+        home.replace('/', '\\')
+    )
+
+    var out = this
+    variants.forEach { candidate ->
+        if (candidate.isNotEmpty()) {
+            out = out.replace(candidate, "~")
+        }
+    }
+    return out.replace("~\\", "~/")
+}
+
+/**
+ * Applies built-in log sanitization (user-home path only).
+ */
+fun String.sanitizeForLogs(): String = redactUserPath()
+
 fun qs(w: Int, h: Int = -1): QSize = if(h == -1) QSize(w,w) else QSize(w, h)
 
 val activeWindow: QWidget?

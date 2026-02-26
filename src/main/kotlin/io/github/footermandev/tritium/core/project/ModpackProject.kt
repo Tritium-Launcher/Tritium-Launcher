@@ -410,7 +410,7 @@ class ModpackProjectType : ProjectType {
         val json = Json { prettyPrint = true }
         val packName = vars["packName"]?.trim().takeIf { !it.isNullOrEmpty() }
             ?: throw IllegalArgumentException("No Name specified for new project")
-        logger.info("Modpack createProject start: name={} vars={}", packName, vars)
+        logger.info("Modpack createProject start: name={} ({} vars)", packName, vars.size)
 
         val iconPath = vars["iconPath"]?.trim().orEmpty()
 
@@ -537,7 +537,11 @@ class ModpackProjectType : ProjectType {
             variables = vars,
             steps = steps
         )
-        logger.info("Modpack template steps finished: success={} root={}", execResult.successful, projectRoot)
+        logger.info(
+            "Modpack template steps finished: success={} root={}",
+            execResult.successful,
+            projectRoot.toString().redactUserPath()
+        )
 
         // Only write project definition if generation succeeded
         if(execResult.successful) {
@@ -595,10 +599,10 @@ class ModpackProjectType : ProjectType {
                         val gitJob = async {
                             if(gitInit) {
                                 try {
-                                    logger.info("Initializing git repo in {}", projectRoot)
+                                    logger.info("Initializing git repo in {}", projectRoot.toString().redactUserPath())
                                     Git.initRepo(projectRoot)
                                 } catch (t: Throwable) {
-                                    logger.warn("Git init failed in {}", projectRoot, t)
+                                    logger.warn("Git init failed in {}", projectRoot.toString().redactUserPath(), t)
                                 }
                             }
                         }
@@ -611,12 +615,20 @@ class ModpackProjectType : ProjectType {
                             )
                             ProjectTaskMngr.updateProgress(bootstrapTaskId, 70.0)
                             val loaderStart = System.currentTimeMillis()
-                            logger.info("Installing loader {} {} into {}", loader.id, loaderVersion, projectRoot)
+                            logger.info(
+                                "Installing loader {} {} into {}",
+                                loader.id,
+                                loaderVersion,
+                                projectRoot.toString().redactUserPath()
+                            )
                             val ok = loader.installClient(loaderVersion, mcVer, projectRoot)
                             logger.info("Loader install {} ({})", if(ok) "ok" else "failed", formatDurationMs(System.currentTimeMillis() - loaderStart))
                             if (ok) {
                                 val merged = MicrosoftAuth.writeMergedVersionJson(mcVer, loader.id, loaderVersion, projectRoot)
-                                logger.info("Merged version json written to {}", merged?.toAbsolute() ?: "null")
+                                logger.info(
+                                    "Merged version json written to {}",
+                                    merged?.toAbsolute()?.toString()?.redactUserPath() ?: "null"
+                                )
                                 ProjectTaskMngr.update(bootstrapTaskId, detail = "Finalizing bootstrap")
                                 ProjectTaskMngr.updateProgress(bootstrapTaskId, 95.0)
                                 bootstrapSucceeded = true

@@ -161,11 +161,11 @@ object MicrosoftAuth {
         return try {
             val silentParams = SilentParameters.builder(authScopes, account).build()
             val result = MSAL.app.acquireTokenSilently(silentParams).await()
-            authLogger.info("Token refreshed silently for ${account.username()}; expires ${result.expiresOnDate()}")
+            authLogger.info("Token refreshed silently; expires {}", result.expiresOnDate())
             result.accessToken()
         } catch (e: Exception) {
-            authLogger.error("Silent token refresh failed for $homeId: ${e.message}", e)
-            throw TokenException("Silent token refresh failed for $homeId", e)
+            authLogger.error("Silent token refresh failed", e)
+            throw TokenException("Silent token refresh failed", e)
         }
     }
 
@@ -186,7 +186,7 @@ object MicrosoftAuth {
             ProfileMngr.Cache.initForAccount(homeAccountId, mcToken)
             return@withContext ProfileMngr.Cache.getForAccount(homeAccountId)
         } catch (e: Exception) {
-            authLogger.warn("Could not get MC profile for account $homeAccountId", e)
+            authLogger.warn("Could not get MC profile for account", e)
             return@withContext null
         }
     }
@@ -200,10 +200,10 @@ object MicrosoftAuth {
             val silentParams = SilentParameters.builder(authScopes, account).build()
             val result = MSAL.app.acquireTokenSilently(silentParams).await()
             currentAccountHomeId = homeAccountId
-            authLogger.info("Switched to account ${account.username()}")
+            authLogger.info("Switched active Microsoft account")
             return true
         } catch (e: Exception) {
-            authLogger.warn("Failed to switch silently to $homeAccountId", e)
+            authLogger.warn("Failed to switch account silently", e)
             currentAccountHomeId = homeAccountId
             return false
         }
@@ -236,7 +236,7 @@ object MicrosoftAuth {
             ProfileMngr.Cache.initForAccount(homeId, mcToken)
             mcToken
         } catch (e: Exception) {
-            authLogger.warn("Failed to refresh MC token silently for {}", homeId, e)
+            authLogger.warn("Failed to refresh MC token silently", e)
             null
         }
     }
@@ -267,15 +267,15 @@ object MicrosoftAuth {
             val body = response.bodyAsText()
 
             if(response.status != HttpStatusCode.OK) {
-                authLogger.error("XBL authentication failed with HTTP status ${response.status.value}: $body")
+                authLogger.error("XBL authentication failed with HTTP status {}", response.status.value)
                 throw AuthenticationException("XBL authentication failed with HTTP status ${response.status.value}")
             }
 
-            debug("XBL auth response received: $body")
+            debug("XBL auth response received (status=${response.status.value}, size=${body.length})", debugLogging)
             val xblResponse: XblTokenResponse = try {
                 json.decodeFromString(XblTokenResponse.serializer(), body)
             } catch (e: Exception) {
-                authLogger.error("Failed to parse XBL auth response: ${e.message}", e)
+                authLogger.error("Failed to parse XBL auth response", e)
                 throw AuthenticationException("XBL auth response parsing failed", e)
             }
 
@@ -284,7 +284,7 @@ object MicrosoftAuth {
 
             Pair(xblToken, hash)
         } catch (e: Exception) {
-            authLogger.error("Error in authWithLive: ${e.message}", e)
+            authLogger.error("Error in authWithLive", e)
             throw AuthenticationException("XBL authentication failed", e)
         }
     }
@@ -314,21 +314,21 @@ object MicrosoftAuth {
             val body = response.bodyAsText()
 
             if(response.status != HttpStatusCode.OK) {
-                authLogger.error("XSTS authentication failed with HTTP status ${response.status.value}: $body")
+                authLogger.error("XSTS authentication failed with HTTP status {}", response.status.value)
                 throw AuthenticationException("XSTS authentication failed with HTTP status ${response.status.value}")
             }
 
-            debug("XSTS auth response received: $body")
+            debug("XSTS auth response received (status=${response.status.value}, size=${body.length})", debugLogging)
             val xstsResponse: XstsTokenResponse = try {
                 json.decodeFromString(XstsTokenResponse.serializer(), body)
             } catch (e: Exception) {
-                authLogger.error("Failed to parse XSTS auth response: ${e.message}", e)
+                authLogger.error("Failed to parse XSTS auth response", e)
                 throw AuthenticationException("XSTS auth response parsing failed", e)
             }
 
             xstsResponse.token
         } catch (e: Exception) {
-            authLogger.error("Error in authWithXSTS: ${e.message}", e)
+            authLogger.error("Error in authWithXSTS", e)
             throw AuthenticationException("XSTS authentication failed", e)
         }
     }
@@ -354,15 +354,15 @@ object MicrosoftAuth {
             val body = response.bodyAsText()
 
             if (response.status != HttpStatusCode.OK) {
-                authLogger.error("MC authentication failed with HTTP status ${response.status.value}: $body")
+                authLogger.error("MC authentication failed with HTTP status {}", response.status.value)
                 throw TokenException("MC authentication failed with HTTP status ${response.status.value}")
             }
 
-            debug("MC auth response received: $body", debugLogging)
+            debug("MC auth response received (status=${response.status.value}, size=${body.length})", debugLogging)
             val authResponse: MCAuthResponse = try {
                 json.decodeFromString(MCAuthResponse.serializer(), body)
             } catch (e: Exception) {
-                authLogger.error("Failed to parse MC auth response: ${e.message}", e)
+                authLogger.error("Failed to parse MC auth response", e)
                 throw TokenException("MC auth response parsing failed", e)
             }
 
@@ -396,13 +396,12 @@ object MicrosoftAuth {
                         if (!isActive) break
 
                         val homeId = acct.homeAccountId()
-                        val username = acct.username()
-                        authLogger.info("Attempting silent token acquire for account username='${username}' homeId='${homeId ?: "null"}'")
+                        authLogger.info("Attempting silent token acquire for cached account")
 
                         try {
                             val silentParams = SilentParameters.builder(authScopes, acct).build()
                             val result = try { MSAL.app.acquireTokenSilently(silentParams).await() } catch (e: Exception) {
-                                authLogger.info("Silent acquire failed for $username (homeId=$homeId): ${e.message}")
+                                authLogger.info("Silent acquire failed for cached account")
                                 null
                             }
 
@@ -422,16 +421,16 @@ object MicrosoftAuth {
                                         val mcToken = getMCToken(msToken)
                                         ProfileMngr.Cache.init(mcToken)
                                     }
-                                    authLogger.info("Auto sign-in succeeded for account username='${username}' homeId='${resolvedHomeId}'")
+                                    authLogger.info("Auto sign-in succeeded for cached account")
                                 } catch (pErr: Throwable) {
-                                    authLogger.warn("Auto sign-in succeeded but profile init failed for homeId='${resolvedHomeId}': ${pErr.message}", pErr)
+                                    authLogger.warn("Auto sign-in succeeded but profile init failed", pErr)
                                 }
 
                                 restored = true
                                 break
                             }
                         } catch (t: Throwable) {
-                            authLogger.warn("Error attempting silent restore for account $username", t)
+                            authLogger.warn("Error attempting silent account restore", t)
                         }
                     }
 
@@ -476,7 +475,7 @@ object MicrosoftAuth {
             val account = MSAL.findAccount(homeAccountId = homeAccountId) ?: return
             MSAL.app.removeAccount(account).await()
         } catch (e: Exception) {
-            authLogger.warn("signOutAccount error for $homeAccountId", e)
+            authLogger.warn("signOutAccount error", e)
         } finally {
             if (currentAccountHomeId == homeAccountId) currentAccountHomeId = null
         }
@@ -541,7 +540,7 @@ object MicrosoftAuth {
      */
     suspend fun setupMinecraftInstance(versionId: String, targetDir: VPath): Boolean = withContext(Dispatchers.IO) {
         try {
-            authLogger.info("MC setup start version={} dir={}", versionId, targetDir)
+            authLogger.info("MC setup start version={} dir={}", versionId, targetDir.toString().redactUserPath())
             val manifest = fetchVersionManifest()
             val entry = manifest.versions.firstOrNull { it.id == versionId }
                 ?: run {
@@ -750,7 +749,7 @@ object MicrosoftAuth {
     private fun osMatches(os: RuleOS): Boolean {
         val nameOk = when(os.name) {
             null -> true
-            "linux" -> !Platform.isWindows && !Platform.isMacOS
+            "linux" -> Platform.isLinux
             "windows" -> Platform.isWindows
             "osx" -> Platform.isMacOS
             else -> false
@@ -788,6 +787,12 @@ object MicrosoftAuth {
                                     authLogger.debug("lib[{}/{}] artifact {}", idx+1, total, artifact.path)
                                     dest.parent().mkdirs()
                                     val bytes = withTimeout(20_000) { httpClient.get(artifact.url).bodyAsBytes() }
+                                    val expectedSize = artifact.size
+                                    if (expectedSize != null && expectedSize > 0L && bytes.size.toLong() != expectedSize) {
+                                        throw IllegalStateException(
+                                            "Artifact size mismatch for ${artifact.path}: got ${bytes.size}, expected $expectedSize"
+                                        )
+                                    }
                                     cache.parent().mkdirs()
                                     cache.writeBytes(bytes)
                                     if (!linkOrCopyFromCache(cache, dest)) {
@@ -826,6 +831,12 @@ object MicrosoftAuth {
                                 if(!dest.exists()) {
                                     dest.parent().mkdirs()
                                     val bytes = withTimeout(20_000) { httpClient.get(classifier.url).bodyAsBytes() }
+                                    val expectedSize = classifier.size
+                                    if (expectedSize != null && expectedSize > 0L && bytes.size.toLong() != expectedSize) {
+                                        throw IllegalStateException(
+                                            "Native size mismatch for ${classifier.path}: got ${bytes.size}, expected $expectedSize"
+                                        )
+                                    }
                                     cache.parent().mkdirs()
                                     cache.writeBytes(bytes)
                                     if (!linkOrCopyFromCache(cache, dest)) {
@@ -855,7 +866,8 @@ object MicrosoftAuth {
         val osKey = when {
             Platform.isWindows -> "windows"
             Platform.isMacOS -> "osx"
-            else -> "linux"
+            Platform.isLinux -> "linux"
+            else -> return null
         }
         val raw = natives[osKey] ?: return null
         if(!raw.contains("\${arch}")) return raw
@@ -956,13 +968,13 @@ object MicrosoftAuth {
             if(!instanceDir.exists()) {
                 instanceDir.parent().mkdirs()
                 Files.createSymbolicLink(instanceDir.toJPath(), sharedDir.toJPath())
-                authLogger.info("Assets: linked instance cache to shared {}", sharedDir.toAbsolute())
+                authLogger.info("Assets: linked instance cache to shared {}", sharedDir.toAbsolute().toString().redactUserPath())
             } else {
                 val isSymlink = Files.isSymbolicLink(instanceDir.toJPath())
                 if(isSymlink) {
-                    authLogger.info("Assets: instance cache already linked to shared {}", sharedDir.toAbsolute())
+                    authLogger.info("Assets: instance cache already linked to shared {}", sharedDir.toAbsolute().toString().redactUserPath())
                 } else {
-                    authLogger.info("Assets: instance cache exists; using per-instance assets at {}", instanceDir.toAbsolute())
+                    authLogger.info("Assets: instance cache exists; using per-instance assets at {}", instanceDir.toAbsolute().toString().redactUserPath())
                     return instanceDir
                 }
             }
@@ -1008,14 +1020,14 @@ class TokenException(message: String, cause: Throwable? = null) : Exception(mess
 
 /** Response from XBL token endpoint. */
 @Serializable
-data class XblTokenResponse(
+private data class XblTokenResponse(
     @SerialName("Token") val token: String,
     @SerialName("DisplayClaims") val displayClaims: DisplayClaims
 )
 
 /** Request payload for XBL authentication. */
 @Serializable
-data class XblAuthRequest(
+private data class XblAuthRequest(
     val Properties: Properties,
     val RelyingParty: String,
     val TokenType: String
@@ -1023,7 +1035,7 @@ data class XblAuthRequest(
 
 /** Request payload for XSTS authentication. */
 @Serializable
-data class XstsAuthRequest(
+private data class XstsAuthRequest(
     val Properties: XstsProperties,
     val RelyingParty: String,
     val TokenType: String
@@ -1031,7 +1043,7 @@ data class XstsAuthRequest(
 
 /** XBL auth properties. */
 @Serializable
-data class Properties(
+private data class Properties(
     val AuthMethod: String,
     val SiteName: String,
     val RpsTicket: String
@@ -1039,33 +1051,33 @@ data class Properties(
 
 /** XSTS auth properties. */
 @Serializable
-data class XstsProperties(
+private data class XstsProperties(
     val SandboxId: String,
     val UserTokens: List<String>
 )
 
 /** Response from XSTS token endpoint. */
 @Serializable
-data class XstsTokenResponse(
+private data class XstsTokenResponse(
     @SerialName("Token") val token: String,
     @SerialName("DisplayClaims") val displayClaims: DisplayClaims
 )
 
 /** Display claims container for XBL/XSTS responses. */
 @Serializable
-data class DisplayClaims(
+private data class DisplayClaims(
     @SerialName("xui") val xui: List<Xui>
 )
 
 /** User hash entry in XBL/XSTS responses. */
 @Serializable
-data class Xui(
+private data class Xui(
     @SerialName("uhs") val userHash: String
 )
 
 /** Response from Minecraft auth endpoint. */
 @Serializable
-data class MCAuthResponse(
+private data class MCAuthResponse(
     @SerialName("username") val uuid: String, // this is not the player UUID.
     @SerialName("access_token") val accessToken: String,
     @SerialName("token_type") val tokenType: String,
@@ -1074,7 +1086,7 @@ data class MCAuthResponse(
 
 /** Version manifest root. */
 @Serializable
-data class VersionManifest(
+private data class VersionManifest(
     val versions: List<MCVersion>
 )
 
@@ -1088,7 +1100,7 @@ data class MCVersion(
 
 /** Detailed version JSON for a specific Minecraft version. */
 @Serializable
-data class VersionInfo(
+private data class VersionInfo(
     val id: String,
     val downloads: VersionDownloads,
     val libraries: List<Library> = emptyList(),
@@ -1102,13 +1114,13 @@ data class VersionInfo(
 
 /** Version downloads root. */
 @Serializable
-data class VersionDownloads(
+private data class VersionDownloads(
     val client: DownloadEntry
 )
 
 /** Download entry for a file in the version JSON. */
 @Serializable
-data class DownloadEntry(
+private data class DownloadEntry(
     val url: String,
     val sha1: String? = null,
     val size: Long? = null
@@ -1116,7 +1128,7 @@ data class DownloadEntry(
 
 /** Library definition in a version JSON. */
 @Serializable
-data class Library(
+private data class Library(
     val name: String? = null,
     val url: String? = null,
     val rules: List<LibraryRule>? = null,
@@ -1127,14 +1139,14 @@ data class Library(
 
 /** Library downloads container. */
 @Serializable
-data class LibraryDownloads(
+private data class LibraryDownloads(
     val artifact: LibraryArtifact? = null,
     val classifiers: Map<String, LibraryArtifact>? = null
 )
 
 /** Library artifact entry. */
 @Serializable
-data class LibraryArtifact(
+private data class LibraryArtifact(
     val path: String,
     val url: String,
     val sha1: String? = null,
@@ -1143,27 +1155,27 @@ data class LibraryArtifact(
 
 /** Library extract rules for natives. */
 @Serializable
-data class LibraryExtract(
+private data class LibraryExtract(
     val exclude: List<String> = emptyList()
 )
 
 /** Rule that filters a library by OS. */
 @Serializable
-data class LibraryRule(
+private data class LibraryRule(
     val action: String,
     val os: RuleOS? = null
 )
 
 /** OS rule descriptor. */
 @Serializable
-data class RuleOS(
+private data class RuleOS(
     val name: String? = null,
     val arch: String? = null
 )
 
 /** Asset index descriptor. */
 @Serializable
-data class AssetIndex(
+private data class AssetIndex(
     val id: String,
     val url: String,
     val sha1: String? = null,
@@ -1172,45 +1184,45 @@ data class AssetIndex(
 
 /** Asset index file contents. */
 @Serializable
-data class AssetIndexFile(
+private data class AssetIndexFile(
     val objects: Map<String, AssetObject>
 )
 
 /** Asset object entry. */
 @Serializable
-data class AssetObject(
+private data class AssetObject(
     val hash: String,
     val size: Long
 )
 
 /** Argument entry with optional rules. */
 @Serializable
-data class Argument(
+private data class Argument(
     val rules: List<LibraryRule>? = null,
     val value: JsonElement
 )
 
 /** Java version requirement in version JSON. */
 @Serializable
-data class JavaVersion(
+private data class JavaVersion(
     val majorVersion: Int
 )
 
 /** Logging descriptor in version JSON. */
 @Serializable
-data class Logging(
+private data class Logging(
     val client: LoggingConfig? = null
 )
 
 /** Logging config for client. */
 @Serializable
-data class LoggingConfig(
+private data class LoggingConfig(
     val file: LoggingFile
 )
 
 /** Logging file descriptor. */
 @Serializable
-data class LoggingFile(
+private data class LoggingFile(
     val id: String,
     val url: String
 )

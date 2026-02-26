@@ -5,6 +5,7 @@ import ch.qos.logback.classic.spi.ILoggingEvent
 import ch.qos.logback.core.AppenderBase
 import io.github.footermandev.tritium.fromTR
 import io.github.footermandev.tritium.io.VPath
+import io.github.footermandev.tritium.sanitizeForLogs
 import java.io.BufferedOutputStream
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
@@ -59,6 +60,7 @@ object Logs {
      * Appends a rendered log entry to the active log file and notifies listeners.
      */
     fun append(entry: String) {
+        val sanitizedEntry = entry.sanitizeForLogs()
         prepareForLaunch()
         synchronized(lock) {
             runCatching {
@@ -67,7 +69,7 @@ object Logs {
                     StandardOpenOption.APPEND,
                     StandardOpenOption.WRITE
                 ).use { out ->
-                    out.write(entry.toByteArray(Charsets.UTF_8))
+                    out.write(sanitizedEntry.toByteArray(Charsets.UTF_8))
                 }
             }.onFailure {
                 System.err.println("Tritium log append failed: ${it.message}")
@@ -75,7 +77,7 @@ object Logs {
         }
 
         listeners.forEach { listener ->
-            runCatching { listener(entry) }
+            runCatching { listener(sanitizedEntry) }
         }
     }
 

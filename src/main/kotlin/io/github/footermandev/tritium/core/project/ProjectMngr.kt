@@ -384,6 +384,28 @@ object ProjectMngr {
         return addCatalogPath(dir, resolvedName)
     }
 
+    /**
+     * Removes a project directory from the catalog.
+     *
+     * @param projectDir Project root directory to remove.
+     * @return `true` when an entry was removed.
+     */
+    fun removeProjectFromCatalog(projectDir: VPath): Boolean {
+        val normalized = normalizeCatalogPath(projectDir.expandHome().toAbsolute().normalize())
+        val removed = removeCatalogPaths(listOf(normalized))
+        if (removed <= 0) return false
+
+        synchronized(_projectsLock) {
+            _projects.removeAll { normalizeCatalogPath(it.projectDir) == normalized }
+        }
+
+        val currentActive = activeProject
+        if (currentActive != null && normalizeCatalogPath(currentActive.projectDir) == normalized) {
+            activeProject = null
+        }
+        return true
+    }
+
     /** Creates a project model for an invalid catalog entry. */
     private fun invalidCatalogProject(path: VPath, catalogName: String): ProjectBase {
         val name = catalogName.ifBlank { path.fileName().ifBlank { path.toString() } }

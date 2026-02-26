@@ -1,24 +1,28 @@
 package io.github.footermandev.tritium.ui.logging
 
 import io.github.footermandev.tritium.connect
+import io.github.footermandev.tritium.io.VPath
 import io.github.footermandev.tritium.logging.Logs
 import io.github.footermandev.tritium.m
 import io.github.footermandev.tritium.qs
+import io.github.footermandev.tritium.redactUserPath
 import io.github.footermandev.tritium.ui.helpers.runOnGuiThread
 import io.github.footermandev.tritium.ui.theme.TColors
 import io.github.footermandev.tritium.ui.theme.qt.setThemedStyle
+import io.github.footermandev.tritium.ui.widgets.TPushButton
+import io.github.footermandev.tritium.ui.widgets.constructor_functions.hBoxLayout
 import io.github.footermandev.tritium.ui.widgets.constructor_functions.vBoxLayout
+import io.qt.core.QMimeData
+import io.qt.core.QUrl
 import io.qt.gui.QTextCursor
-import io.qt.widgets.QDialog
-import io.qt.widgets.QLabel
-import io.qt.widgets.QPlainTextEdit
-import io.qt.widgets.QWidget
+import io.qt.widgets.*
 
 /**
  * Live log viewer dialog for `~/tritium/logs/tritium.log`.
  */
 class LogDialog(parent: QWidget? = null) : QDialog(parent) {
     private val logPathLabel = QLabel()
+    private val copyFileButton = TPushButton()
     private val logView = QPlainTextEdit()
     private val unsubscribe: () -> Unit
 
@@ -32,14 +36,29 @@ class LogDialog(parent: QWidget? = null) : QDialog(parent) {
         logPathLabel.objectName = "tritiumLogPath"
         logPathLabel.text = Logs.currentLogFilePath()
 
+        copyFileButton.apply {
+            objectName = "tritiumCopyLogFileButton"
+            text = "Copy File"
+            toolTip = "Copy the current log file to clipboard"
+        }
+
         logView.objectName = "tritiumLogView"
         logView.isReadOnly = true
         logView.lineWrapMode = QPlainTextEdit.LineWrapMode.NoWrap
 
+        val header = QWidget(this)
+        hBoxLayout(header) {
+            contentsMargins = 0.m
+            widgetSpacing = 6
+            addWidget(logPathLabel)
+            addStretch(1)
+            addWidget(copyFileButton)
+        }
+
         vBoxLayout(this) {
             contentsMargins = 8.m
             widgetSpacing = 6
-            addWidget(logPathLabel)
+            addWidget(header)
             addWidget(logView)
         }
 
@@ -60,6 +79,9 @@ class LogDialog(parent: QWidget? = null) : QDialog(parent) {
         }
 
         reloadFromDisk()
+        copyFileButton.clicked.connect {
+            copyCurrentLogFileToClipboard()
+        }
         unsubscribe = Logs.addEntryListener { entry ->
             runOnGuiThread {
                 appendEntry(entry)
@@ -98,6 +120,31 @@ class LogDialog(parent: QWidget? = null) : QDialog(parent) {
         logView.moveCursor(QTextCursor.MoveOperation.End)
         logView.insertPlainText(entry)
         moveCursorToBottom()
+    }
+
+    private fun copyCurrentLogFileToClipboard() {
+        val sourceLog = runCatching {
+            VPath.parse(Logs.currentLogFilePath()).expandHome().toAbsolute().normalize()
+        }.getOrNull() ?: return
+        if (!sourceLog.exists() || !sourceLog.isFile()) return
+
+        val redactedContent = sourceLog.readTextOrNull()?.redactUserPath() ?: return
+        val tempLog = runCatching {
+            val tmpRoot = VPath.parse(System.getProperty("java.io.tmpdir")).expandHome().toAbsolute().normalize()
+            tmpRoot.resolve("tritium").resolve("clipboard").resolve("tritium.log")
+        }.getOrNull() ?: return
+        val tempDir = tempLog.parent()
+        if (!tempDir.exists() && !tempDir.mkdirs()) return
+        runCatching {
+            tempLog.writeBytes(redactedContent.toByteArray(Charsets.UTF_8))
+        }.getOrElse { return }
+
+        val clipboard = QApplication.clipboard() ?: return
+        val localPath = tempLog.toString()
+        val mime = QMimeData()
+        mime.setUrls(listOf(QUrl.fromLocalFile(localPath)))
+        mime.setText(localPath.redactUserPath())
+        clipboard.setMimeData(mime)
     }
 
     /**

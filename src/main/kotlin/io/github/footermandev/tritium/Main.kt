@@ -40,7 +40,7 @@ class Main {
         @JvmStatic
         fun main(vararg args: String) {
             Logs.prepareForLaunch()
-            mainLogger.info("Starting with args: ${args.joinToString(" ")}")
+            mainLogger.info("Starting Tritium (argCount={})", args.size)
             Platform.printSystemDetails(mainLogger)
 
             if (QApplication.instance() == null) QApplication.initialize(args)

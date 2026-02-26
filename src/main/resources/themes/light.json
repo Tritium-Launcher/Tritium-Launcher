@@ -104,6 +104,8 @@
     "dashboard/small_grass": "icons/dashboard/small_grass.svg",
 
     "menu/build": "icons/menu/build.svg",
-    "menu/run": "icons/menu/run.svg"
+    "menu/run": "icons/menu/run.svg",
+    "menu/rerun": "icons/menu/rerun.svg",
+    "menu/stop": "icons/menu/stop.svg"
   }
 }

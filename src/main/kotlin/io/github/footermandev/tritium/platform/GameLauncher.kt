@@ -1,5 +1,4 @@
 package io.github.footermandev.tritium.platform
-
 import io.github.footermandev.tritium.accounts.MicrosoftAuth
 import io.github.footermandev.tritium.accounts.ProfileMngr
 import io.github.footermandev.tritium.core.modloader.LaunchContext
@@ -10,13 +9,16 @@ import io.github.footermandev.tritium.extension.core.BuiltinRegistries
 import io.github.footermandev.tritium.extension.core.CoreSettingValues
 import io.github.footermandev.tritium.io.VPath
 import io.github.footermandev.tritium.logger
+import io.github.footermandev.tritium.redactUserPath
 import io.qt.gui.QGuiApplication
 import kotlinx.coroutines.*
 import kotlinx.serialization.json.*
 import java.io.File
+import java.util.*
+import java.util.jar.JarFile
 
 /**
- * Responsible for preparing and launching a Minecraft instance for a project:
+* Responsible for preparing and launching a Minecraft instance for a project:
  * - Ensures base MC + loader assets exist
  * - Builds merged version JSON + classpath/arguments
  * - Spawns the JVM process and streams early output
@@ -26,22 +28,59 @@ object GameLauncher {
     private val json = Json { ignoreUnknownKeys = true }
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private val pathSeparator = File.pathSeparator ?: ":"
+    private const val MAX_MISSING_LIB_LOG = 12
 
     /**
-     * Public entry point for launching a project; executes asynchronously on IO scope.
+     * Attach project process tracking to an already-running process by [pid].
+     */
+    fun attachToRunningProcess(project: ProjectBase, pid: Long): Boolean =
+        GameProcessMngr.attachToPid(project, pid)
+
+    /**
+     * Returns tracked game process metadata for [project], or null when none is attached.
+     */
+    fun gameProcessSnapshot(project: ProjectBase): GameProcessMngr.GameProcessContext? =
+        GameProcessMngr.snapshot(project)
+
+    /**
+     * Returns true when a tracked game process is currently running for [project].
+     */
+    fun isGameRunning(project: ProjectBase): Boolean =
+        GameProcessMngr.isActive(project)
+
+    /**
+     * Request game process termination for [project].
+     */
+    fun killGameProcess(project: ProjectBase, force: Boolean = true): Boolean =
+        GameProcessMngr.kill(project, force)
+
+    /**
+     * Stop tracking the game process for [project] without terminating it.
+     */
+    fun detachGameProcess(project: ProjectBase): Boolean =
+        GameProcessMngr.detach(project)
+
+    /**
+     * Subscribe to game process lifecycle events.
+     */
+    fun addGameProcessListener(listener: (GameProcessMngr.GameProcessEvent) -> Unit): () -> Unit =
+        GameProcessMngr.addListener(listener)
+
+    /**
+    * Public entry point for launching a project; executes asynchronously on IO scope.
      */
     fun launch(project: ProjectBase) {
         scope.launch {
-            try {
-                launchInternal(project)
-            } catch (t: Throwable) {
-                logger.error("Launch failed for {}", project.name, t)
-            }
+        try {
+            launchInternal(project)
+        } catch (t: Throwable) {
+            logger.error("Launch failed for {}", project.name, t)
+        }
         }
     }
 
     /**
-     * Resolve metadata, ensure required files, and start the game process for a modpack project.
+    * Resolve metadata, ensure required files, and start the game process for a modpack project.
      */
     private suspend fun launchInternal(project: ProjectBase) {
         if (project.typeId != "modpack") {
@@ -52,13 +91,13 @@ object GameLauncher {
         val metaFile = project.projectDir.resolve("trmodpack.json")
         val metaText = metaFile.readTextOrNull()
         if (metaText.isNullOrBlank()) {
-            logger.warn("Cannot launch; trmodpack.json missing at {}", metaFile.toAbsolute())
+            logger.warn("Cannot launch; trmodpack.json missing for project '{}'", project.name)
             return
         }
 
         val meta = runCatching { json.decodeFromString(ModpackMeta.serializer(), metaText) }.getOrNull()
         if (meta == null) {
-            logger.warn("Cannot launch; failed to parse trmodpack.json at {}", metaFile.toAbsolute())
+            logger.warn("Cannot launch; failed to parse trmodpack.json for project '{}'", project.name)
             return
         }
 
@@ -84,20 +123,38 @@ object GameLauncher {
         val versionJsonFile = if (mergedJson.exists()) mergedJson else baseJson
         val versionJsonText = versionJsonFile.readTextOrNull()
         if (versionJsonText.isNullOrBlank()) {
-            logger.warn("Cannot launch; version json missing at {}", versionJsonFile.toAbsolute())
+            logger.warn("Cannot launch; version json missing for project '{}'", project.name)
             return
         }
 
         val versionObj = json.parseToJsonElement(versionJsonText).jsonObject
         val mainClass = readMainClass(versionObj)
         if (mainClass.isNullOrBlank()) {
-            logger.warn("Cannot launch; mainClass missing in {}", versionJsonFile.toAbsolute())
+            logger.warn("Cannot launch; mainClass missing for project '{}'", project.name)
             return
         }
 
-        val classpathEntries = buildClasspathEntries(project.projectDir, versionObj, mergedId, mcVersion)
+        val classpathResult = buildClasspathEntries(project.projectDir, versionObj, mergedId, mcVersion)
+        val classpathEntries = classpathResult.entries
+        if (classpathResult.missingEntries.isNotEmpty()) {
+            logMissingLibraries(
+                project.name,
+                classpathResult.missingEntries,
+                "Cannot launch; required libraries are missing before launch"
+            )
+            return
+        }
         val context = LaunchContext(project.projectDir, mcVersion, loaderVersion, mergedId, versionObj)
         loader.prepareLaunchClasspath(context, classpathEntries)
+        val missingAfterLoader = findMissingClasspathEntries(classpathEntries)
+        if (missingAfterLoader.isNotEmpty()) {
+            logMissingLibraries(
+                project.name,
+                missingAfterLoader,
+                "Cannot launch; classpath contains missing or invalid library entries"
+            )
+            return
+        }
         if (classpathEntries.isEmpty()) {
             logger.warn("Cannot launch; classpath is empty for {}", project.name)
             return
@@ -116,7 +173,12 @@ object GameLauncher {
         }
 
         if (username.isNullOrBlank() || uuid.isNullOrBlank() || accessToken.isNullOrBlank()) {
-            logger.warn("Cannot launch; missing account info (username={}, uuid={}, token={})", username, uuid, accessToken != null)
+            logger.warn(
+                "Cannot launch; missing account info (usernamePresent={}, uuidPresent={}, tokenPresent={})",
+                !username.isNullOrBlank(),
+                !uuid.isNullOrBlank(),
+                !accessToken.isNullOrBlank()
+            )
             return
         }
 
@@ -150,6 +212,11 @@ object GameLauncher {
             stripMinecraftArtifactsFromModulePath(jvmArgs)
         }
         val finalJvmArgs = ensureClasspathArg(stripUnsupportedArgs(jvmArgs), classpath)
+        val companionToken = UUID.randomUUID().toString().replace("-", "")
+        CompanionBridge.setSessionToken(companionToken)
+        val launchJvmArgs = finalJvmArgs.toMutableList().apply {
+            add("-Dtritium.companion.ws.port=${CoreSettingValues.companionWsPort()}")
+        }
 
         val command = mutableListOf<String>()
         command += javaExec.toAbsolute().toString()
@@ -157,47 +224,40 @@ object GameLauncher {
             "-Xms1G",
             "-Xmx2G"
         )
-        command += finalJvmArgs
+        command += launchJvmArgs
         // Strip duplicate main-jar entries from the classpath
         val cpEntries = classpathEntries.filter { it.isNotBlank() }
         val dedupCp = cpEntries.distinct()
         val classpathToUse = dedupCp.joinToString(pathSeparator)
-        if (!finalJvmArgs.contains("-cp")) {
+        if (!launchJvmArgs.contains("-cp")) {
             command += listOf("-cp", classpathToUse)
         }
         command += mainClass
         command += gameArgs
 
-        logger.info("Launching Minecraft: {}", command.joinToString(" "))
-        logger.info("Classpath entries ({}): {}", dedupCp.size, dedupCp.joinToString(", "))
-        logger.info("JVM args ({}): {}", finalJvmArgs.size, finalJvmArgs.joinToString(" "))
-        logger.info("Game args ({}): {}", gameArgs.size, gameArgs.joinToString(" "))
+        logger.info(
+            "Launching Minecraft process (project='{}', mainClass='{}', classpathEntries={}, jvmArgs={}, gameArgs={})",
+            project.name,
+            mainClass,
+            dedupCp.size,
+            launchJvmArgs.size,
+            gameArgs.size
+        )
         try {
-            val process = withContext(Dispatchers.IO) {
-                ProcessBuilder(command)
-                    .directory(project.projectDir.toJFile())
-                    .redirectErrorStream(true)
-                    .start()
-            }
-
-            // Stream child output to logs for early failures
-            scope.launch(Dispatchers.IO) {
-                try {
-                    process.inputStream.bufferedReader().useLines { lines ->
-                        lines.take(400).forEach { line ->
-                            logger.info("MC: {}", line)
-                        }
-                    }
-                } catch (t: Throwable) {
-                    logger.debug("Failed reading MC output", t)
-                }
-            }
+            val processBuilder = ProcessBuilder(command)
+                .directory(project.projectDir.toJFile())
+                .redirectErrorStream(true)
+            processBuilder.environment()["TRITIUM_COMPANION_WS_TOKEN"] = companionToken
+            val process = withContext(Dispatchers.IO) { processBuilder.start() }
+            GameProcessMngr.attachLaunched(project, process)
 
             scope.launch(Dispatchers.IO) {
                 val exit = process.waitFor()
                 logger.info("Minecraft exited with code {}", exit)
+                CompanionBridge.clearSessionToken()
             }
         } catch (t: Throwable) {
+            CompanionBridge.clearSessionToken()
             logger.error("Failed to start Minecraft process", t)
         }
     }
@@ -217,7 +277,7 @@ object GameLauncher {
             return configuredExec
         }
         if (!configured.isNullOrBlank()) {
-            logger.warn("Configured java.path.{} is invalid: {}", requiredMajor, configured)
+            logger.warn("Configured java.path.{} is invalid: {}", requiredMajor, configured.redactUserPath())
         }
 
         val detected = Java.findDetectedExecutableForMajor(requiredMajor)
@@ -230,10 +290,16 @@ object GameLauncher {
     /**
      * Build the launch classpath entries from the merged version JSON (libraries + main jar)
      */
-    private fun buildClasspathEntries(projectDir: VPath, versionObj: JsonObject, mergedId: String, mcVersion: String): MutableList<String> {
+    private data class ClasspathBuildResult(
+        val entries: MutableList<String>,
+        val missingEntries: List<String>
+    )
+
+    private fun buildClasspathEntries(projectDir: VPath, versionObj: JsonObject, mergedId: String, mcVersion: String): ClasspathBuildResult {
         val libsDir = projectDir.resolve(".tr").resolve("libraries")
         val libs = versionObj["libraries"]?.jsonArray ?: JsonArray(emptyList())
         val entries = mutableListOf<String>()
+        val missing = linkedSetOf<String>()
         for (el in libs) {
             val obj = el as? JsonObject ?: continue
             if(!rulesAllow(obj["rules"]?.jsonArray)) continue
@@ -246,7 +312,11 @@ object GameLauncher {
                 if (path.contains("net/minecraft/client/")) continue
                 if (!path.endsWith(".jar")) continue
                 val jar = libsDir.resolve(path)
-                if (jar.exists()) entries.add(jar.toAbsolute().toString())
+                if (isUsableLibraryFile(jar, expectedSize = null)) {
+                    entries.add(jar.toAbsolute().toString())
+                } else {
+                    missing += jar.toAbsolute().toString()
+                }
             }
         }
 
@@ -254,9 +324,16 @@ object GameLauncher {
         val mergedJar = versionsDir.resolve(mergedId).resolve("$mergedId.jar")
         val baseJar = versionsDir.resolve(mcVersion).resolve("$mcVersion.jar")
         val mainJar = if (mergedJar.exists()) mergedJar else baseJar
-        if (mainJar.exists()) entries.add(0, mainJar.toAbsolute().toString())
+        if (isUsableLibraryFile(mainJar, expectedSize = null)) {
+            entries.add(0, mainJar.toAbsolute().toString())
+        } else {
+            missing += mainJar.toAbsolute().toString()
+        }
 
-        return entries
+        return ClasspathBuildResult(
+            entries = entries,
+            missingEntries = missing.toList()
+        )
     }
 
     /**
@@ -319,7 +396,6 @@ object GameLauncher {
             "--assetsDir", assetsDir.toAbsolute().toString(),
             "--assetIndex", assetIndexId,
             "--uuid", uuid,
-            "--accessToken", accessToken,
             "--userType", "msa",
             "--versionType", "release"
         )
@@ -593,10 +669,10 @@ object GameLauncher {
             toDelete.forEach { f ->
                 try {
                     if (f.delete()) {
-                        logger.info("Removed intermediate MC artifact {}", f.toAbsolute())
+                        logger.info("Removed intermediate MC artifact {}", f.toAbsolute().toString().redactUserPath())
                     }
                 } catch (_: Throwable) {
-                    logger.debug("Failed to remove intermediate MC artifact {}", f.toAbsolute())
+                    logger.debug("Failed to remove intermediate MC artifact {}", f.toAbsolute().toString().redactUserPath())
                 }
             }
         }
@@ -646,8 +722,13 @@ object GameLauncher {
         val loaderVersion = meta.loaderVersion
 
         val baseJson = projectDir.resolve(".tr").resolve("versions").resolve(mcVersion).resolve("$mcVersion.json")
-        if (!baseJson.exists()) {
-            logger.info("Missing base version json; downloading Minecraft {}", mcVersion)
+        val baseNeedsRefresh = if (!baseJson.exists()) {
+            true
+        } else {
+            !isBaseLibrariesHealthy(projectDir, baseJson) || !isNativeRuntimeHealthy(projectDir, mcVersion)
+        }
+        if (baseNeedsRefresh) {
+            logger.info("Refreshing base Minecraft {} files and libraries", mcVersion)
             if (!MicrosoftAuth.setupMinecraftInstance(mcVersion, projectDir)) {
                 logger.warn("Failed to setup Minecraft {}", mcVersion)
                 return false
@@ -669,5 +750,115 @@ object GameLauncher {
         }
 
         return true
+    }
+
+    /**
+     * Validate that all applicable base-version libraries exist and look usable.
+     *
+     * This catches stale/broken cache links (for example truncated jars) so setup can
+     * re-materialize libraries before launch.
+     */
+    private fun isBaseLibrariesHealthy(projectDir: VPath, baseJsonFile: VPath): Boolean {
+        val baseText = baseJsonFile.readTextOrNull() ?: return false
+        val baseObj = runCatching { json.parseToJsonElement(baseText).jsonObject }.getOrNull() ?: return false
+        val libs = baseObj["libraries"]?.jsonArray ?: return true
+        val libsDir = projectDir.resolve(".tr").resolve("libraries")
+
+        for (el in libs) {
+            val obj = el as? JsonObject ?: continue
+            if (!rulesAllow(obj["rules"]?.jsonArray)) continue
+
+            val artifact = obj["downloads"]?.jsonObject
+                ?.get("artifact")?.jsonObject
+            val path = artifact?.get("path")?.jsonPrimitive?.contentOrNull
+                ?: obj["name"]?.jsonPrimitive?.contentOrNull?.let { mavenPath(it) }
+                ?: continue
+            val expectedSize = artifact?.get("size")?.jsonPrimitive?.longOrNull
+            val file = libsDir.resolve(path)
+
+            if (!isUsableLibraryFile(file, expectedSize)) {
+                logger.warn("Base library is missing/corrupt: {}", file.toAbsolute().toString().redactUserPath())
+                return false
+            }
+        }
+
+        return true
+    }
+
+    /**
+     * Validate that extracted native runtime binaries exist for the active platform.
+     */
+    private fun isNativeRuntimeHealthy(projectDir: VPath, mcVersion: String): Boolean {
+        val nativesDir = projectDir.resolve(".tr").resolve("natives").resolve(mcVersion)
+        if (!nativesDir.exists() || !nativesDir.isDir()) {
+            logger.warn("Native runtime directory missing for Minecraft {}", mcVersion)
+            return false
+        }
+
+        val requiredExt = when {
+            Platform.isWindows -> ".dll"
+            Platform.isMacOS -> ".dylib"
+            Platform.isLinux -> ".so"
+            else -> {
+                logger.warn("Unknown platform '{}' while validating native runtime", Platform.name)
+                return true
+            }
+        }
+
+        val hasNative = try {
+            nativesDir.walk(recursive = true).any { it.isFile() && it.fileName().lowercase().endsWith(requiredExt) }
+        } catch (t: Throwable) {
+            logger.warn("Failed to validate native runtime directory {}", nativesDir.toAbsolute().toString().redactUserPath(), t)
+            false
+        }
+
+        if (!hasNative) {
+            logger.warn(
+                "Native runtime for Minecraft {} is missing platform binaries (expected '*{}')",
+                mcVersion,
+                requiredExt
+            )
+        }
+        return hasNative
+    }
+
+    private fun isUsableLibraryFile(file: VPath, expectedSize: Long?): Boolean {
+        if (!file.exists()) return false
+        val size = file.sizeOrNull() ?: return false
+        if (size <= 0L) return false
+        if (expectedSize != null && expectedSize > 0L && size != expectedSize) return false
+        if (!file.fileName().endsWith(".jar", ignoreCase = true)) return true
+
+        return try {
+            JarFile(file.toJFile()).use { true }
+        } catch (_: Throwable) {
+            false
+        }
+    }
+
+    private fun findMissingClasspathEntries(classpathEntries: List<String>): List<String> {
+        val missing = linkedSetOf<String>()
+        for (entry in classpathEntries) {
+            if (entry.isBlank()) continue
+            val file = VPath.parse(entry)
+            if (!isUsableLibraryFile(file, expectedSize = null)) {
+                missing += file.toAbsolute().toString()
+            }
+        }
+        return missing.toList()
+    }
+
+    private fun logMissingLibraries(projectName: String, missing: List<String>, reason: String) {
+        if (missing.isEmpty()) return
+        val shown = missing.take(MAX_MISSING_LIB_LOG)
+        logger.warn("{} for '{}': {} missing entries", reason, projectName, missing.size)
+        shown.forEach { path ->
+            logger.warn("Missing library: {}", path.redactUserPath())
+        }
+        val remaining = missing.size - shown.size
+        if (remaining > 0) {
+            logger.warn("... and {} more missing entries", remaining)
+        }
+        logger.warn("Tip: Use File -> Invalidate Caches, then launch again to regenerate runtime libraries.")
     }
 }

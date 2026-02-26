@@ -81,6 +81,20 @@ class NeoForge : ModLoader(), Registrable {
     }
 
     /**
+     * Ensure the NeoForge shared install/cache directory exists.
+     *
+     * Cache invalidation can remove this directory while the process is still running.
+     */
+    private fun ensureInstallDir(): Boolean {
+        if (dir.exists()) return true
+        val created = runCatching { dir.mkdirs() }.getOrDefault(false)
+        if (!created) {
+            logger.error("Failed to recreate NeoForge install directory: {}", dir.toAbsolute())
+        }
+        return created
+    }
+
+    /**
      * Fetch all published NeoForge versions from the Maven metadata.
      */
     override suspend fun getVersions(): List<String> {
@@ -142,6 +156,7 @@ class NeoForge : ModLoader(), Registrable {
      */
     override suspend fun download(version: String): Boolean {
         return try {
+            if (!ensureInstallDir()) return false
             val downloadUri = getDownloadUri(version)
 
             logger.info("Downloading NeoForge installer...")
@@ -234,6 +249,7 @@ class NeoForge : ModLoader(), Registrable {
      */
     override suspend fun uninstall(version: String): Boolean {
         return try {
+            if (!ensureInstallDir()) return false
             val filename = "neoforge-$version-installer.jar"
             val file = dir.resolve(filename)
             var ok = true
@@ -317,6 +333,7 @@ class NeoForge : ModLoader(), Registrable {
      */
     override suspend fun installClient(version: String, mcVersion: String, targetDir: VPath): Boolean {
         logger.info("NeoForge install start version={} mc={} target={}", version, mcVersion, targetDir)
+        if (!ensureInstallDir()) return false
         val installer = dir.resolve("neoforge-$version-installer.jar")
         if(!installer.exists()) {
             if(!download(version)) return false
@@ -1407,14 +1424,25 @@ class NeoForge : ModLoader(), Registrable {
             entries.map { obj ->
                 launch {
                     val name = obj["name"]?.jsonPrimitive?.contentOrNull ?: return@launch
-                    val url = obj["url"]?.jsonPrimitive?.contentOrNull ?: "https://maven.neoforged.net/releases/"
-                    val path = mavenPathFromName(name)
+                    val artifact = obj["downloads"]?.jsonObject
+                        ?.get("artifact")?.jsonObject
+                    val path = artifact?.get("path")?.jsonPrimitive?.contentOrNull
+                        ?: mavenPathFromName(name)
+                    val explicitUrl = artifact?.get("url")?.jsonPrimitive?.contentOrNull
+                    val expectedSize = artifact?.get("size")?.jsonPrimitive?.longOrNull
+                    val baseUrl = obj["url"]?.jsonPrimitive?.contentOrNull ?: "https://maven.neoforged.net/releases/"
+                    val url = explicitUrl ?: (baseUrl.trimEnd('/') + "/" + path)
                     val dest = baseDir.resolve(path)
                     val cacheFile = cacheRoot.resolve(path)
                     if (linkOrCopyFromCache(cacheFile, dest)) return@launch
                     semaphore.withPermit {
                         try {
-                            val bytes = client.get(url.trimEnd('/') + "/" + path).bodyAsBytes()
+                            val bytes = client.get(url).bodyAsBytes()
+                            if (expectedSize != null && expectedSize > 0L && bytes.size.toLong() != expectedSize) {
+                                throw IllegalStateException(
+                                    "Size mismatch for $name ($path): got ${bytes.size}, expected $expectedSize"
+                                )
+                            }
                             cacheFile.parent().mkdirs()
                             cacheFile.writeBytes(bytes)
                             dest.parent().mkdirs()

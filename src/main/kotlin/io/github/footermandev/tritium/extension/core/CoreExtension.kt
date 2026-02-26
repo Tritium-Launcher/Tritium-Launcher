@@ -22,6 +22,7 @@ import io.github.footermandev.tritium.ui.project.editor.syntax.builtin.JsonLangu
 import io.github.footermandev.tritium.ui.project.editor.syntax.builtin.PythonLanguage
 import io.github.footermandev.tritium.ui.project.menu.builtin.BuiltinMenuItems
 import io.github.footermandev.tritium.ui.project.sidebar.ProjectFilesSidePanelProvider
+import io.github.footermandev.tritium.ui.project.sidebar.ProjectLogsSidePanelProvider
 import io.github.footermandev.tritium.ui.project.sidebar.ProjectNotificationsSidePanelProvider
 import org.koin.core.module.Module
 import org.koin.dsl.module
@@ -78,6 +79,7 @@ internal object CoreExtension : Extension {
             fileTypes.register(BuiltinFileTypes.all())
 
             sidePanels.register(ProjectFilesSidePanelProvider())
+            sidePanels.register(ProjectLogsSidePanelProvider())
             sidePanels.register(ProjectNotificationsSidePanelProvider())
 
             menuItems.register(BuiltinMenuItems.All)

@@ -45,6 +45,7 @@ object TIcons {
     val NPM        get() = pix("file/npm", 16, 16)
     val Shell      get() = pix("file/shell", 16, 16)
     val Powershell get() = pix("file/powershell", 16, 16)
+    val Log        get() = pix("file/log", 16, 16)
 
     val ModConfig   get() = pix("file/config", 16, 16)
     val TrMeta      get() = pix("file/tr_config", 16, 16)
@@ -79,6 +80,8 @@ object TIcons {
 
     val Build get() = pix("menu/build", 16, 16)
     val Run   get() = pix("menu/run", 16, 16)
+    val Rerun get() = pix("menu/rerun", 16, 16)
+    val Stop  get() = pix("menu/stop", 16, 16)
 
     val Cross          get() = pix("ui/cross", 16, 16)
     val SmallCross     get() = pix("ui/small_cross", 16, 16)
