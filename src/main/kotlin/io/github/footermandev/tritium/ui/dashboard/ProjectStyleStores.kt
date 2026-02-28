@@ -48,7 +48,7 @@ class LayoutStore(private val file: VPath) {
         try {
             val encoded = cache.mapValues { Entry(it.value.x(), it.value.y()) }
             file.parent().mkdirs()
-            file.writeBytes(json.encodeToString(encoded).toByteArray())
+            file.writeBytesAtomic(json.encodeToString(encoded).toByteArray())
         } catch (_: Throwable) {}
     }
 }
@@ -134,7 +134,7 @@ class GroupStore(private val file: VPath) {
         try {
             val payload = Payload(groups.map { GroupPayload(it.key, it.value.toList()) }, order.toList())
             file.parent().mkdirs()
-            file.writeBytes(json.encodeToString(payload).toByteArray())
+            file.writeBytesAtomic(json.encodeToString(payload).toByteArray())
         } catch (_: Throwable) {}
     }
 }

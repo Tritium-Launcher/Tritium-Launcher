@@ -13,7 +13,6 @@ import io.github.footermandev.tritium.ui.widgets.TPushButton
 import io.github.footermandev.tritium.ui.widgets.constructor_functions.hBoxLayout
 import io.github.footermandev.tritium.ui.widgets.constructor_functions.vBoxLayout
 import io.qt.core.QMimeData
-import io.qt.core.QUrl
 import io.qt.gui.QTextCursor
 import io.qt.widgets.*
 
@@ -142,7 +141,7 @@ class LogDialog(parent: QWidget? = null) : QDialog(parent) {
         val clipboard = QApplication.clipboard() ?: return
         val localPath = tempLog.toString()
         val mime = QMimeData()
-        mime.setUrls(listOf(QUrl.fromLocalFile(localPath)))
+        mime.setUrls(listOf(tempLog.toQUrl()))
         mime.setText(localPath.redactUserPath())
         clipboard.setMimeData(mime)
     }

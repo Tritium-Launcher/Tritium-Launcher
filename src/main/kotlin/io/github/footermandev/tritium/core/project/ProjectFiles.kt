@@ -45,7 +45,7 @@ object ProjectFiles {
         try {
             metaFile.parent().mkdirs()
             val payload = json.encodeToString(meta)
-            metaFile.writeBytes(payload.toByteArray())
+            metaFile.writeBytesAtomic(payload.toByteArray())
         } catch (t: Throwable) {
             logger.error("Failed writing $NEW_FILE at {}", metaFile, t)
             throw t

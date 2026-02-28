@@ -14,7 +14,8 @@ plugins {
 ksp { arg("verbose", "true") }
 
 group = "io.github.footermandev.tritium"
-version = "0.1.2"
+version = "0.1.3"
+val tritiumVersion = project.version.toString()
 
 val os: OperatingSystem = OperatingSystem.current()
 val arch: String = System.getProperty("os.arch").lowercase()
@@ -99,9 +100,17 @@ tasks.test {
     useJUnitPlatform()
 }
 
+tasks.processResources {
+    inputs.property("version", tritiumVersion)
+    filesMatching("version.txt") {
+        expand("version" to tritiumVersion)
+    }
+}
+
 tasks.jar {
     manifest {
         attributes["Main-Class"] = "io.github.footermandev.tritium.Main"
+        attributes["Implementation-Version"] = tritiumVersion
     }
 }
 
@@ -111,6 +120,7 @@ tasks.shadowJar {
     archiveVersion.set("")
     manifest {
         attributes["Main-Class"] = "io.github.footermandev.tritium.Main"
+        attributes["Implementation-Version"] = tritiumVersion
     }
     transform(XmlAppendingTransformer::class.java){
         resource = "META-INF/qtjambi-deployment.xml"

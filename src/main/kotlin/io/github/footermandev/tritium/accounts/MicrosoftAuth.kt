@@ -5,6 +5,7 @@ import com.microsoft.aad.msal4j.IAccount
 import com.microsoft.aad.msal4j.InteractiveRequestParameters
 import com.microsoft.aad.msal4j.SilentParameters
 import io.github.footermandev.tritium.*
+import io.github.footermandev.tritium.io.IODispatchers
 import io.github.footermandev.tritium.io.VPath
 import io.github.footermandev.tritium.io.linkOrCopyFromCache
 import io.github.footermandev.tritium.platform.ClientIdentity
@@ -24,13 +25,19 @@ import kotlinx.coroutines.sync.withPermit
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.*
+import java.io.ByteArrayInputStream
 import java.nio.file.Files
+import java.security.MessageDigest
 import java.util.concurrent.CompletableFuture
+import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.concurrent.ThreadLocalRandom
+import java.util.jar.JarFile
 import java.util.zip.ZipInputStream
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
-val authLogger = logger("Auth")
+val authLogger = logger(Auth::class)
+internal object Auth // Useful for tracking log calls in IJ
 
 /**
  * Handles Microsoft and Xbox Live authentication for Minecraft.
@@ -39,7 +46,17 @@ val authLogger = logger("Auth")
  * TODO: Set up DeviceCode authentication alongside OAuth.
  */
 object MicrosoftAuth {
+    private const val LIBS_CONCURRENCY_MIN = 8
+    private const val LIBS_CONCURRENCY_MAX = 24
+    private const val ASSET_CONCURRENCY_MIN = 16
+    private const val ASSET_CONCURRENCY_MAX = 64
+    private const val CACHE_MAINTENANCE_INTERVAL_MS = 12L * 60L * 60L * 1000L
+    private const val CACHE_SCRUB_ASSET_SAMPLE_SIZE = 160
+    private const val CACHE_SCRUB_LIBRARY_SAMPLE_SIZE = 64
+    private const val CACHE_GC_MAX_DELETE_PER_RUN = 200_000
+
     private val json = Json { ignoreUnknownKeys = true }
+    private val sha1FileNameRegex = Regex("^[0-9a-f]{40}$")
     private val httpClient = HttpClient(CIO) {
         install(ContentNegotiation) {
             json(json)
@@ -53,6 +70,10 @@ object MicrosoftAuth {
         install(HttpRequestRetry) {
             maxRetries = 3
             retryOnExceptionOrServerErrors(maxRetries = 3)
+            retryIf { _, response ->
+                response.status == HttpStatusCode.TooManyRequests ||
+                    response.status == HttpStatusCode.RequestTimeout
+            }
             delayMillis { retry ->
                 (500L * (1L shl (retry - 1))).coerceAtMost(5000L)
             }
@@ -538,7 +559,7 @@ object MicrosoftAuth {
     /**
      * Download and prepare a vanilla Minecraft instance into the target directory.
      */
-    suspend fun setupMinecraftInstance(versionId: String, targetDir: VPath): Boolean = withContext(Dispatchers.IO) {
+    suspend fun setupMinecraftInstance(versionId: String, targetDir: VPath): Boolean = withContext(IODispatchers.BulkIO) {
         try {
             authLogger.info("MC setup start version={} dir={}", versionId, targetDir.toString().redactUserPath())
             val manifest = fetchVersionManifest()
@@ -554,14 +575,15 @@ object MicrosoftAuth {
 
             val versionsDir = targetDir.resolve(".tr").resolve("versions").resolve(versionId)
             versionsDir.mkdirs()
-            versionsDir.resolve("$versionId.json").writeBytes(versionJsonText.toByteArray())
+            versionsDir.resolve("$versionId.json").writeBytesAtomic(versionJsonText.toByteArray())
 
             val client = versionInfo.downloads.client
             val clientJar = versionsDir.resolve("$versionId.jar")
             if(!clientJar.exists()) {
                 authLogger.info("Downloading client jar {}", client.url)
-                val bytes = httpClient.get(client.url).bodyAsBytes()
-                clientJar.writeBytes(bytes)
+                val bytes = downloadBytesChecked(client.url, timeoutMs = 60_000L)
+                validateJarBytesOrThrow("$versionId.jar", bytes)
+                clientJar.writeBytesAtomic(bytes)
             }
 
             val libsDir = targetDir.resolve(".tr").resolve("libraries")
@@ -587,8 +609,8 @@ object MicrosoftAuth {
                         logDir.mkdirs()
                         val dest = logDir.resolve(logCfg.file.id)
                         if(!dest.exists()) {
-                            val bytes = httpClient.get(logCfg.file.url).bodyAsBytes()
-                            dest.writeBytes(bytes)
+                            val bytes = downloadBytesChecked(logCfg.file.url, timeoutMs = 30_000L)
+                            dest.writeBytesAtomic(bytes)
                         }
                     }
                 }
@@ -617,7 +639,7 @@ object MicrosoftAuth {
         loaderId: String,
         loaderVersion: String,
         targetDir: VPath
-    ): VPath? = withContext(Dispatchers.IO) {
+    ): VPath? = withContext(IODispatchers.FileIO) {
         val baseDir = targetDir.resolve(".tr").resolve("versions").resolve(mcVersion)
         val baseJsonFile = baseDir.resolve("$mcVersion.json")
         val baseJar = baseDir.resolve("$mcVersion.jar")
@@ -638,12 +660,12 @@ object MicrosoftAuth {
         val outDir = targetDir.resolve(".tr").resolve("versions").resolve(mergedId)
         outDir.mkdirs()
         val outJson = outDir.resolve("$mergedId.json")
-        outJson.writeBytes(mergedJson.toByteArray())
+        outJson.writeBytesAtomic(mergedJson.toByteArray())
 
         if(baseJar.exists()) {
             val outJar = outDir.resolve("$mergedId.jar")
             if(!outJar.exists()) {
-                outJar.writeBytes(baseJar.bytesOrNothing())
+                outJar.writeBytesAtomic(baseJar.bytesOrNothing())
             }
         }
 
@@ -736,9 +758,52 @@ object MicrosoftAuth {
         return json.decodeFromString(VersionManifest.serializer(), body)
     }
 
+    private suspend fun downloadBytesChecked(url: String, timeoutMs: Long = 20_000L): ByteArray = withTimeout(timeoutMs) {
+        val response = httpClient.get(url)
+        if (!response.status.isSuccess()) {
+            throw IllegalStateException("HTTP ${response.status.value} downloading '$url'")
+        }
+        response.bodyAsBytes()
+    }
+
+    private fun validateJarBytesOrThrow(path: String, bytes: ByteArray) {
+        if (!path.endsWith(".jar", ignoreCase = true)) return
+        if (!isValidJarBytes(bytes)) {
+            throw IllegalStateException("Downloaded jar is invalid: $path")
+        }
+    }
+
+    private fun isUsableLibraryArtifact(path: VPath, expectedSize: Long?, requireJar: Boolean): Boolean {
+        if (!path.exists()) return false
+        val size = path.sizeOrNull() ?: return false
+        if (size <= 0L) return false
+        if (expectedSize != null && expectedSize > 0L && size != expectedSize) return false
+        if (!requireJar) return true
+        return isValidJarFile(path)
+    }
+
+    private fun isValidJarFile(path: VPath): Boolean {
+        return try {
+            JarFile(path.toJFile()).use { true }
+        } catch (_: Throwable) {
+            false
+        }
+    }
+
+    private fun isValidJarBytes(bytes: ByteArray): Boolean {
+        if (bytes.size < 4) return false
+        return try {
+            ZipInputStream(ByteArrayInputStream(bytes)).use { zis ->
+                zis.nextEntry != null
+            }
+        } catch (_: Throwable) {
+            false
+        }
+    }
+
     private fun isLibraryAllowed(rules: List<LibraryRule>?): Boolean {
         if(rules.isNullOrEmpty()) return true
-        var allowed = true
+        var allowed = false
         for(rule in rules) {
             if(rule.os != null && !osMatches(rule.os)) continue
             allowed = rule.action == "allow"
@@ -762,11 +827,12 @@ object MicrosoftAuth {
         return if(os.arch == "x86") arch.contains("86") && !arch.contains("64") else arch.contains("64")
     }
 
-    private suspend fun downloadLibraries(libraries: List<Library>, libsDir: VPath, nativesDir: VPath) = withContext(Dispatchers.IO) {
+    private suspend fun downloadLibraries(libraries: List<Library>, libsDir: VPath, nativesDir: VPath) = withContext(IODispatchers.BulkIO) {
         val total = libraries.size
-        authLogger.info("Libraries: {} to ensure", total)
+        val concurrency = chooseLibraryConcurrency(total)
+        authLogger.info("Libraries: {} to ensure, concurrency={}", total, concurrency)
         val sharedLibsDir = fromTR(TConstants.Dirs.CACHE).resolve("libraries")
-        val semaphore = Semaphore(8)
+        val semaphore = Semaphore(concurrency)
         val startedAt = System.currentTimeMillis()
         var completed = 0
 
@@ -776,46 +842,67 @@ object MicrosoftAuth {
                     if(!isLibraryAllowed(lib.rules)) return@launch
                     semaphore.withPermit {
                         try {
+                            var primaryArtifactFile: VPath? = null
+                            var primaryArtifactPath: String? = null
+
                             val artifact = lib.downloads?.artifact
                             if(artifact != null) {
                                 val dest = libsDir.resolve(artifact.path)
                                 val cache = sharedLibsDir.resolve(artifact.path)
-                                if (linkOrCopyFromCache(cache, dest)) {
-                                    return@launch
-                                }
-                                if(!dest.exists()) {
+                                val expectedSize = artifact.size
+                                if (!isUsableLibraryArtifact(dest, expectedSize, requireJar = true)) {
+                                    if (!linkOrCopyFromCache(cache, dest) || !isUsableLibraryArtifact(dest, expectedSize, requireJar = true)) {
+                                        if (dest.exists()) dest.delete()
+                                        if (cache.exists() && !isUsableLibraryArtifact(cache, expectedSize, requireJar = true)) {
+                                            cache.delete()
+                                        }
                                     authLogger.debug("lib[{}/{}] artifact {}", idx+1, total, artifact.path)
                                     dest.parent().mkdirs()
-                                    val bytes = withTimeout(20_000) { httpClient.get(artifact.url).bodyAsBytes() }
-                                    val expectedSize = artifact.size
+                                    val bytes = downloadBytesChecked(artifact.url)
                                     if (expectedSize != null && expectedSize > 0L && bytes.size.toLong() != expectedSize) {
                                         throw IllegalStateException(
                                             "Artifact size mismatch for ${artifact.path}: got ${bytes.size}, expected $expectedSize"
                                         )
                                     }
+                                    validateJarBytesOrThrow(artifact.path, bytes)
                                     cache.parent().mkdirs()
-                                    cache.writeBytes(bytes)
+                                    cache.writeBytesAtomic(bytes)
                                     if (!linkOrCopyFromCache(cache, dest)) {
-                                        dest.writeBytes(bytes)
+                                        dest.writeBytesAtomic(bytes)
+                                    }
                                     }
                                 }
+                                primaryArtifactFile = dest
+                                primaryArtifactPath = artifact.path
                             } else if(lib.name != null) {
                                 val url = (lib.url ?: "https://libraries.minecraft.net/").trimEnd('/')
                                 val path = mavenPath(lib.name)
                                 val dest = libsDir.resolve(path)
                                 val cache = sharedLibsDir.resolve(path)
-                                if (linkOrCopyFromCache(cache, dest)) {
-                                    return@launch
-                                }
-                                if(!dest.exists()) {
+                                if (!isUsableLibraryArtifact(dest, expectedSize = null, requireJar = true)) {
+                                    if (!linkOrCopyFromCache(cache, dest) || !isUsableLibraryArtifact(dest, expectedSize = null, requireJar = true)) {
+                                        if (dest.exists()) dest.delete()
+                                        if (cache.exists() && !isUsableLibraryArtifact(cache, expectedSize = null, requireJar = true)) {
+                                            cache.delete()
+                                        }
                                     authLogger.debug("lib[{}/{}] maven {}", idx+1, total, path)
                                     dest.parent().mkdirs()
-                                    val bytes = withTimeout(20_000) { httpClient.get("$url/$path").bodyAsBytes() }
+                                    val bytes = downloadBytesChecked("$url/$path")
+                                    validateJarBytesOrThrow(path, bytes)
                                     cache.parent().mkdirs()
-                                    cache.writeBytes(bytes)
+                                    cache.writeBytesAtomic(bytes)
                                     if (!linkOrCopyFromCache(cache, dest)) {
-                                        dest.writeBytes(bytes)
+                                        dest.writeBytesAtomic(bytes)
                                     }
+                                    }
+                                }
+                                primaryArtifactFile = dest
+                                primaryArtifactPath = path
+                            }
+
+                            if (shouldExtractArtifactNatives(lib, primaryArtifactPath)) {
+                                primaryArtifactFile?.let { artifactFile ->
+                                    extractNatives(artifactFile, nativesDir, lib.extract)
                                 }
                             }
 
@@ -824,23 +911,26 @@ object MicrosoftAuth {
                             if(classifier != null) {
                                 val dest = libsDir.resolve(classifier.path)
                                 val cache = sharedLibsDir.resolve(classifier.path)
-                                if (linkOrCopyFromCache(cache, dest)) {
-                                    extractNatives(dest, nativesDir, lib.extract)
-                                    return@launch
-                                }
-                                if(!dest.exists()) {
+                                val expectedSize = classifier.size
+                                if (!isUsableLibraryArtifact(dest, expectedSize, requireJar = true)) {
+                                    if (!linkOrCopyFromCache(cache, dest) || !isUsableLibraryArtifact(dest, expectedSize, requireJar = true)) {
+                                        if (dest.exists()) dest.delete()
+                                        if (cache.exists() && !isUsableLibraryArtifact(cache, expectedSize, requireJar = true)) {
+                                            cache.delete()
+                                        }
                                     dest.parent().mkdirs()
-                                    val bytes = withTimeout(20_000) { httpClient.get(classifier.url).bodyAsBytes() }
-                                    val expectedSize = classifier.size
+                                    val bytes = downloadBytesChecked(classifier.url)
                                     if (expectedSize != null && expectedSize > 0L && bytes.size.toLong() != expectedSize) {
                                         throw IllegalStateException(
                                             "Native size mismatch for ${classifier.path}: got ${bytes.size}, expected $expectedSize"
                                         )
                                     }
+                                    validateJarBytesOrThrow(classifier.path, bytes)
                                     cache.parent().mkdirs()
-                                    cache.writeBytes(bytes)
+                                    cache.writeBytesAtomic(bytes)
                                     if (!linkOrCopyFromCache(cache, dest)) {
-                                        dest.writeBytes(bytes)
+                                        dest.writeBytesAtomic(bytes)
+                                    }
                                     }
                                 }
                                 extractNatives(dest, nativesDir, lib.extract)
@@ -860,6 +950,20 @@ object MicrosoftAuth {
         }
 
         authLogger.info("Libraries download complete in {}", formatDurationMs(System.currentTimeMillis() - startedAt))
+    }
+
+    private fun shouldExtractArtifactNatives(lib: Library, artifactPath: String?): Boolean {
+        if (artifactPath.isNullOrBlank()) return false
+        if (!artifactPath.endsWith(".jar", ignoreCase = true)) return false
+
+        val normalizedPath = artifactPath.lowercase()
+        if (normalizedPath.contains("-natives-") || normalizedPath.endsWith("-natives.jar")) {
+            return true
+        }
+
+        val coordinate = lib.name ?: return false
+        val classifier = coordinate.split(':').getOrNull(3)?.lowercase() ?: return false
+        return classifier.startsWith("natives-")
     }
 
     private fun pickNativeKey(natives: Map<String, String>): String? {
@@ -893,7 +997,14 @@ object MicrosoftAuth {
         }
     }
 
-    private suspend fun downloadAssets(assetIndex: AssetIndex, targetDir: VPath) = withContext(Dispatchers.IO) {
+    private suspend fun downloadAssets(assetIndex: AssetIndex, targetDir: VPath) = withContext(IODispatchers.BulkIO) {
+        data class PendingAsset(
+            val hash: String,
+            val size: Long,
+            val path: VPath,
+            val url: String
+        )
+
         val sharedAssetsDir = fromTR(TConstants.Dirs.ASSETS)
         sharedAssetsDir.mkdirs()
 
@@ -906,14 +1017,7 @@ object MicrosoftAuth {
         objectsDir.mkdirs()
 
         val indexFile = indexesDir.resolve("${assetIndex.id}.json")
-        if(!indexFile.exists()) {
-            authLogger.info("Assets: downloading index {}", assetIndex.id)
-            val bytes = httpClient.get(assetIndex.url).bodyAsBytes()
-            indexFile.writeBytes(bytes)
-        }
-
-        val indexText = indexFile.readTextOrNull() ?: return@withContext
-        val index = json.decodeFromString(AssetIndexFile.serializer(), indexText)
+        val index = loadAssetIndex(indexFile, assetIndex)
         val total = index.objects.size
         val concurrency = chooseAssetConcurrency(total)
         authLogger.info("Assets: {} objects to ensure (id={}), concurrency={}", total, assetIndex.id, concurrency)
@@ -921,6 +1025,7 @@ object MicrosoftAuth {
         val startedAt = System.currentTimeMillis()
         val semaphore = Semaphore(concurrency) // limit concurrent asset downloads
         var completed = 0
+        val failed = ConcurrentLinkedQueue<PendingAsset>()
 
         coroutineScope {
             index.objects.entries.map { entry ->
@@ -929,16 +1034,43 @@ object MicrosoftAuth {
                     val hash = obj.hash
                     val prefix = hash.substring(0, 2)
                     val objPath = objectsDir.resolve(prefix).resolve(hash)
-                    if(objPath.exists()) {
+                    val existingSize = objPath.sizeOrNull()
+                    if(existingSize != null && existingSize == obj.size) {
                         return@launch
                     }
                     semaphore.withPermit {
+                        val sizeAfterPermit = objPath.sizeOrNull()
+                        if (sizeAfterPermit != null && sizeAfterPermit == obj.size) {
+                            return@withPermit
+                        }
                         objPath.parent().mkdirs()
                         val url = "https://resources.download.minecraft.net/$prefix/$hash"
                         try {
-                            val bytes = withTimeout(20_000) { httpClient.get(url).bodyAsBytes() }
+                            if (objPath.exists()) {
+                                authLogger.warn(
+                                    "Asset {} has invalid cached size (got={}, expected={}), re-downloading",
+                                    hash,
+                                    sizeAfterPermit ?: -1L,
+                                    obj.size
+                                )
+                                objPath.delete()
+                            }
+                            val bytes = downloadBytesChecked(url)
+                            val actualSize = bytes.size.toLong()
+                            if (actualSize != obj.size) {
+                                throw IllegalStateException(
+                                    "Asset size mismatch for $hash: got $actualSize, expected ${obj.size}"
+                                )
+                            }
+                            val actualHash = sha1Hex(bytes)
+                            if (!actualHash.equals(hash, ignoreCase = true)) {
+                                throw IllegalStateException(
+                                    "Asset hash mismatch for $hash: got $actualHash"
+                                )
+                            }
                             objPath.writeBytes(bytes)
                         } catch (t: Exception) {
+                            failed.add(PendingAsset(hash = hash, size = obj.size, path = objPath, url = url))
                             authLogger.warn("Asset {} failed ({}/{}): {}", hash, completed + 1, total, t.message)
                             return@withPermit
                         } finally {
@@ -953,14 +1085,388 @@ object MicrosoftAuth {
             }.joinAll()
         }
 
+        if (failed.isNotEmpty()) {
+            val firstPassFailed = failed.toList().distinctBy { it.hash }
+            val retryConcurrency = minOf(8, concurrency.coerceAtLeast(1))
+            authLogger.warn(
+                "Assets: retrying {} failed downloads with lower concurrency={}",
+                firstPassFailed.size,
+                retryConcurrency
+            )
+            val stillFailed = ConcurrentLinkedQueue<PendingAsset>()
+            val retrySemaphore = Semaphore(retryConcurrency)
+
+            coroutineScope {
+                firstPassFailed.map { pending ->
+                    launch {
+                        retrySemaphore.withPermit {
+                            try {
+                                val existingSize = pending.path.sizeOrNull()
+                                if (existingSize != null && existingSize == pending.size) return@withPermit
+                                if (pending.path.exists()) pending.path.delete()
+                                pending.path.parent().mkdirs()
+
+                                val bytes = downloadBytesChecked(pending.url, timeoutMs = 45_000L)
+                                val actualSize = bytes.size.toLong()
+                                if (actualSize != pending.size) {
+                                    throw IllegalStateException(
+                                        "Asset size mismatch for ${pending.hash}: got $actualSize, expected ${pending.size}"
+                                    )
+                                }
+                                val actualHash = sha1Hex(bytes)
+                                if (!actualHash.equals(pending.hash, ignoreCase = true)) {
+                                    throw IllegalStateException(
+                                        "Asset hash mismatch for ${pending.hash}: got $actualHash"
+                                    )
+                                }
+                                pending.path.writeBytes(bytes)
+                            } catch (_: Exception) {
+                                stillFailed.add(pending)
+                            }
+                        }
+                    }
+                }.joinAll()
+            }
+
+            if (stillFailed.isNotEmpty()) {
+                val remaining = stillFailed.toList().distinctBy { it.hash }
+                val sample = remaining.take(8).joinToString(", ") { it.hash }
+                throw IllegalStateException(
+                    "Failed to download ${remaining.size} assets after retries (sample hashes: $sample)"
+                )
+            }
+        }
+
         authLogger.info("Assets download complete in {}", formatDurationMs(System.currentTimeMillis() - startedAt))
+    }
+
+    private suspend fun loadAssetIndex(indexFile: VPath, assetIndex: AssetIndex): AssetIndexFile {
+        val cachedBytes = if (indexFile.exists()) indexFile.bytesOrNull() else null
+        if (cachedBytes != null) {
+            val cachedValid = validateAssetIndexBytes(cachedBytes, assetIndex)
+            if (cachedValid) {
+                val cachedParsed = parseAssetIndexBytes(cachedBytes, assetIndex.id, "cache")
+                if (cachedParsed != null) {
+                    return cachedParsed
+                }
+                authLogger.warn("Assets: cached index {} is invalid JSON, refreshing", assetIndex.id)
+            } else {
+                authLogger.warn("Assets: cached index {} failed integrity validation, refreshing", assetIndex.id)
+            }
+        }
+
+        authLogger.info("Assets: downloading index {}", assetIndex.id)
+        val downloaded = downloadBytesChecked(assetIndex.url, timeoutMs = 30_000L)
+        if (!validateAssetIndexBytes(downloaded, assetIndex)) {
+            throw IllegalStateException("Downloaded asset index ${assetIndex.id} failed integrity validation")
+        }
+        val parsed = parseAssetIndexBytes(downloaded, assetIndex.id, "download")
+            ?: throw IllegalStateException("Downloaded asset index ${assetIndex.id} is invalid JSON")
+        indexFile.writeBytes(downloaded)
+        return parsed
+    }
+
+    /**
+     * Low-priority shared runtime cache maintenance.
+     * - Scrub a small sample of cached assets/libs for corruption
+     * - Garbage collect unreferenced asset indexes and objects based on local projects
+     */
+    suspend fun runSharedCacheMaintenanceIfDue() = withContext(IODispatchers.FileIO) {
+        if (!markCacheMaintenanceIfDue(System.currentTimeMillis())) {
+            return@withContext
+        }
+
+        val assetsRoot = fromTR(TConstants.Dirs.ASSETS)
+        val cacheRoot = fromTR(TConstants.Dirs.CACHE)
+        val assetScrub = scrubSampledAssetObjects(assetsRoot.resolve("objects"), CACHE_SCRUB_ASSET_SAMPLE_SIZE)
+        val libScrub = scrubSampledLibraries(cacheRoot.resolve("libraries"), CACHE_SCRUB_LIBRARY_SAMPLE_SIZE)
+        val gcStats = gcAssetCacheByReachableIndexes(assetsRoot)
+
+        authLogger.info(
+            "Cache maintenance complete: assetScrub(scanned={}, evicted={}), libScrub(scanned={}, evicted={}), assetGc(indexesRemoved={}, indexesKept={}, objectsScanned={}, objectsDeleted={}, gcLimited={})",
+            assetScrub.scanned,
+            assetScrub.evicted,
+            libScrub.scanned,
+            libScrub.evicted,
+            gcStats.indexesRemoved,
+            gcStats.indexesKept,
+            gcStats.objectsScanned,
+            gcStats.objectsDeleted,
+            gcStats.hitDeleteLimit
+        )
+    }
+
+    private data class SampleScrubStats(
+        val scanned: Int,
+        val evicted: Int
+    )
+
+    private data class AssetGcStats(
+        val indexesRemoved: Int,
+        val indexesKept: Int,
+        val objectsScanned: Int,
+        val objectsDeleted: Int,
+        val hitDeleteLimit: Boolean
+    )
+
+    private fun markCacheMaintenanceIfDue(nowMs: Long): Boolean {
+        val stampFile = fromTR(TConstants.Dirs.CACHE).resolve(".cache-maintenance.timestamp")
+        return try {
+            val previous = if (stampFile.exists()) {
+                stampFile.readTextOrNull()?.trim()?.toLongOrNull()
+            } else {
+                null
+            }
+            if (previous != null && nowMs - previous < CACHE_MAINTENANCE_INTERVAL_MS) {
+                false
+            } else {
+                stampFile.parent().mkdirs()
+                stampFile.writeTextAtomic(nowMs.toString())
+                true
+            }
+        } catch (t: Throwable) {
+            authLogger.debug("Failed reading cache maintenance timestamp; continuing", t)
+            true
+        }
+    }
+
+    private fun sampleFiles(root: VPath, sampleSize: Int, predicate: (VPath) -> Boolean): List<VPath> {
+        if (sampleSize <= 0 || !root.exists() || !root.isDir()) return emptyList()
+        val sample = ArrayList<VPath>(sampleSize)
+        var seen = 0L
+        try {
+            Files.walk(root.toJPath()).use { stream ->
+                stream.filter { Files.isRegularFile(it) }.forEach { path ->
+                    val vPath = VPath.parse(path.toString())
+                    if (!predicate(vPath)) return@forEach
+                    seen += 1
+                    if (sample.size < sampleSize) {
+                        sample += vPath
+                    } else {
+                        val slot = ThreadLocalRandom.current().nextLong(seen)
+                        if (slot < sampleSize) {
+                            sample[slot.toInt()] = vPath
+                        }
+                    }
+                }
+            }
+        } catch (t: Throwable) {
+            authLogger.debug("Failed sampling files under {}", root.toAbsolute().toString().redactUserPath(), t)
+            return emptyList()
+        }
+        return sample
+    }
+
+    private fun scrubSampledAssetObjects(objectsDir: VPath, sampleSize: Int): SampleScrubStats {
+        val sample = sampleFiles(objectsDir, sampleSize) { p ->
+            sha1FileNameRegex.matches(p.fileName().lowercase())
+        }
+        var scanned = 0
+        var evicted = 0
+        for (file in sample) {
+            scanned += 1
+            val expectedHash = file.fileName().lowercase()
+            val bytes = file.bytesOrNull()
+            val valid = bytes != null && bytes.isNotEmpty() && sha1Hex(bytes).equals(expectedHash, ignoreCase = true)
+            if (!valid) {
+                if (file.delete()) {
+                    evicted += 1
+                }
+            }
+        }
+        return SampleScrubStats(scanned, evicted)
+    }
+
+    private fun scrubSampledLibraries(libsRoot: VPath, sampleSize: Int): SampleScrubStats {
+        val sample = sampleFiles(libsRoot, sampleSize) { p ->
+            p.fileName().endsWith(".jar", ignoreCase = true)
+        }
+        var scanned = 0
+        var evicted = 0
+        for (file in sample) {
+            scanned += 1
+            if (!isUsableLibraryArtifact(file, expectedSize = null, requireJar = true)) {
+                if (file.delete()) {
+                    evicted += 1
+                }
+            }
+        }
+        return SampleScrubStats(scanned, evicted)
+    }
+
+    private fun gcAssetCacheByReachableIndexes(assetsRoot: VPath): AssetGcStats {
+        val indexesDir = assetsRoot.resolve("indexes")
+        val objectsDir = assetsRoot.resolve("objects")
+        if (!indexesDir.exists() || !objectsDir.exists()) {
+            return AssetGcStats(0, 0, 0, 0, false)
+        }
+
+        val reachableIndexIds = collectReachableAssetIndexIds()
+        if (reachableIndexIds.isEmpty()) {
+            authLogger.info("Assets GC skipped: no reachable project indexes detected")
+            return AssetGcStats(0, 0, 0, 0, false)
+        }
+
+        val reachableHashes = HashSet<String>()
+        var indexesRemoved = 0
+        var indexesKept = 0
+
+        val indexFiles = indexesDir.listFiles { it.isFile() && it.fileName().endsWith(".json", ignoreCase = true) }
+        for (indexFile in indexFiles) {
+            val id = indexFile.fileName().removeSuffix(".json")
+            if (!reachableIndexIds.contains(id)) {
+                if (indexFile.delete()) {
+                    indexesRemoved += 1
+                }
+                continue
+            }
+
+            val bytes = indexFile.bytesOrNull()
+            if (bytes == null || bytes.isEmpty()) continue
+            val parsed = parseAssetIndexBytes(bytes, id, "gc")
+            if (parsed != null) {
+                indexesKept += 1
+                parsed.objects.values.forEach { obj -> reachableHashes += obj.hash.lowercase() }
+            }
+        }
+
+        if (reachableHashes.isEmpty()) {
+            return AssetGcStats(indexesRemoved, indexesKept, 0, 0, false)
+        }
+
+        var objectsScanned = 0
+        var objectsDeleted = 0
+        var hitDeleteLimit = false
+
+        try {
+            Files.walk(objectsDir.toJPath()).use { stream ->
+                val iter = stream.iterator()
+                while (iter.hasNext()) {
+                    val path = iter.next()
+                    if (!Files.isRegularFile(path)) continue
+                    objectsScanned += 1
+                    val fileName = path.fileName?.toString()?.lowercase() ?: continue
+                    val shouldDelete = !sha1FileNameRegex.matches(fileName) || !reachableHashes.contains(fileName)
+                    if (!shouldDelete) continue
+                    if (objectsDeleted >= CACHE_GC_MAX_DELETE_PER_RUN) {
+                        hitDeleteLimit = true
+                        break
+                    }
+                    if (runCatching { Files.deleteIfExists(path) }.getOrDefault(false)) {
+                        objectsDeleted += 1
+                    }
+                }
+            }
+        } catch (t: Throwable) {
+            authLogger.warn("Assets GC scan failed", t)
+        }
+
+        pruneEmptyObjectDirs(objectsDir)
+        return AssetGcStats(indexesRemoved, indexesKept, objectsScanned, objectsDeleted, hitDeleteLimit)
+    }
+
+    private fun collectReachableAssetIndexIds(): Set<String> {
+        val ids = LinkedHashSet<String>()
+        val projectsRoot = fromTR(TConstants.Dirs.PROJECTS)
+        if (!projectsRoot.exists() || !projectsRoot.isDir()) {
+            return ids
+        }
+
+        val projects = projectsRoot.listFiles { it.isDir() }
+        for (projectDir in projects) {
+            val versionsRoot = projectDir.resolve(".tr").resolve("versions")
+            if (!versionsRoot.exists() || !versionsRoot.isDir()) continue
+            val versionDirs = versionsRoot.listFiles { it.isDir() }
+            for (versionDir in versionDirs) {
+                val jsonFiles = versionDir.listFiles { it.isFile() && it.fileName().endsWith(".json", ignoreCase = true) }
+                for (jsonFile in jsonFiles) {
+                    val text = jsonFile.readTextOrNull() ?: continue
+                    val versionObj = runCatching { json.parseToJsonElement(text).jsonObject }.getOrNull() ?: continue
+                    val id = versionObj["assetIndex"]?.jsonObject
+                        ?.get("id")?.jsonPrimitive?.contentOrNull
+                    if (!id.isNullOrBlank()) {
+                        ids += id
+                    }
+                }
+            }
+        }
+        return ids
+    }
+
+    private fun pruneEmptyObjectDirs(objectsDir: VPath) {
+        if (!objectsDir.exists() || !objectsDir.isDir()) return
+        val dirs = mutableListOf<java.nio.file.Path>()
+        try {
+            Files.walk(objectsDir.toJPath()).use { stream ->
+                stream.filter { Files.isDirectory(it) }.forEach { dirs.add(it) }
+            }
+            dirs.sortedByDescending { it.nameCount }.forEach { dir ->
+                if (dir == objectsDir.toJPath()) return@forEach
+                runCatching { Files.deleteIfExists(dir) }
+            }
+        } catch (_: Throwable) {
+        }
+    }
+
+    private fun validateAssetIndexBytes(bytes: ByteArray, assetIndex: AssetIndex): Boolean {
+        if (bytes.isEmpty()) return false
+
+        val expectedSize = assetIndex.size
+        if (expectedSize != null && expectedSize > 0L && bytes.size.toLong() != expectedSize) {
+            return false
+        }
+
+        val expectedSha1 = assetIndex.sha1?.trim()?.lowercase()
+        if (!expectedSha1.isNullOrBlank()) {
+            val actualSha1 = sha1Hex(bytes)
+            if (actualSha1 != expectedSha1) {
+                return false
+            }
+        }
+
+        return true
+    }
+
+    private fun parseAssetIndexBytes(bytes: ByteArray, id: String, source: String): AssetIndexFile? {
+        return runCatching {
+            json.decodeFromString(AssetIndexFile.serializer(), bytes.toString(Charsets.UTF_8))
+        }.onFailure { t ->
+            authLogger.warn("Assets: failed to parse {} index {}", source, id, t)
+        }.getOrNull()
+    }
+
+    private fun sha1Hex(bytes: ByteArray): String {
+        val digest = MessageDigest.getInstance("SHA-1").digest(bytes)
+        val hex = CharArray(digest.size * 2)
+        val digits = "0123456789abcdef"
+        var i = 0
+        for (b in digest) {
+            val v = b.toInt() and 0xFF
+            hex[i++] = digits[v ushr 4]
+            hex[i++] = digits[v and 0x0F]
+        }
+        return String(hex)
     }
 
     private fun chooseAssetConcurrency(total: Int): Int {
         val cores = Runtime.getRuntime().availableProcessors().coerceAtLeast(2)
-        val base = if (total >= 3000) 12 else 8
-        val max = 16
-        return (cores * 2).coerceIn(base, max)
+        val target = when {
+            total >= 10_000 -> 64
+            total >= 6_000 -> 56
+            total >= 3_000 -> 48
+            else -> 32
+        }
+        return (cores * 5).coerceIn(ASSET_CONCURRENCY_MIN, minOf(target, ASSET_CONCURRENCY_MAX))
+    }
+
+    private fun chooseLibraryConcurrency(total: Int): Int {
+        val cores = Runtime.getRuntime().availableProcessors().coerceAtLeast(2)
+        val target = when {
+            total >= 1_200 -> 24
+            total >= 600 -> 16
+            else -> 14
+        }
+        return (cores * 4).coerceIn(LIBS_CONCURRENCY_MIN, minOf(target, LIBS_CONCURRENCY_MAX))
     }
 
     private fun tryCreateSharedAssetsLink(instanceDir: VPath, sharedDir: VPath): VPath {

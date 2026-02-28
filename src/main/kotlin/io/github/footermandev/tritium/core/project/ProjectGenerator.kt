@@ -26,19 +26,25 @@ class ProjectGenerator(private val uiCtx: CoroutineDispatcher = UIDispatcher) {
         onProgress: (String) -> Unit = {},
         onComplete: (Result<TemplateExecutionResult>) -> Unit
     ): Job = scope.launch {
-        try {
-            withContext(uiCtx) { onProgress("Generating Project...") }
-            logger.info("Started generating project '{}'", projectType.id)
-            val result = projectType.createProject(vars)
-            logger.info("Finished generating project '{}'", projectType.id)
-            withContext(uiCtx) { onProgress("Finished") }
-            withContext(uiCtx) { onComplete(Result.success(result)) }
+        withContext(uiCtx) { onProgress("Generating Project...") }
+        logger.info("Started generating project '{}'", projectType.id)
+
+        val result = try {
+            projectType.createProject(vars)
         } catch (c: CancellationException) {
             logger.info("Cancelled generating project '{}'", projectType.id)
             withContext(NonCancellable + uiCtx) { onComplete(Result.failure(c)) }
+            return@launch
         } catch (t: Throwable) {
             logger.warn("Failed to generate project '{}'", projectType.id, t)
             withContext(NonCancellable + uiCtx) { onComplete(Result.failure(t)) }
+            return@launch
+        }
+
+        logger.info("Finished generating project '{}'", projectType.id)
+        withContext(NonCancellable + uiCtx) {
+            onProgress("Finished")
+            onComplete(Result.success(result))
         }
     }
 

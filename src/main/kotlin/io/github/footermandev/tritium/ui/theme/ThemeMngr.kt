@@ -20,8 +20,6 @@ import kotlinx.serialization.json.*
 import java.io.InputStream
 import java.net.URLDecoder
 import java.nio.charset.StandardCharsets
-import java.nio.file.Files
-import java.nio.file.StandardOpenOption
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.jar.JarFile
@@ -790,7 +788,7 @@ object ThemeMngr {
 
             userThemesDir.mkdirs()
             val bytes = json.encodeToString(JsonObject.serializer(), schemaRoot).toByteArray()
-            Files.write(schemaFile.toJPath(), bytes, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING)
+            schemaFile.writeBytesAtomic(bytes)
             logger.info("Wrote theme schema to $schemaFile with ${discoveredColorKeys.size} color keys and ${discoveredIconKeys.size} icon keys")
         } catch (e: Exception) {
             logger.error("Failed to generate/write theme schema", e)

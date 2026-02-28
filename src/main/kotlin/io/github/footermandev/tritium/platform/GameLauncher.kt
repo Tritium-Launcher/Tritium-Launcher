@@ -1,4 +1,6 @@
 package io.github.footermandev.tritium.platform
+
+import io.github.footermandev.tritium.TConstants
 import io.github.footermandev.tritium.accounts.MicrosoftAuth
 import io.github.footermandev.tritium.accounts.ProfileMngr
 import io.github.footermandev.tritium.core.modloader.LaunchContext
@@ -7,6 +9,7 @@ import io.github.footermandev.tritium.core.project.ModpackMeta
 import io.github.footermandev.tritium.core.project.ProjectBase
 import io.github.footermandev.tritium.extension.core.BuiltinRegistries
 import io.github.footermandev.tritium.extension.core.CoreSettingValues
+import io.github.footermandev.tritium.io.IODispatchers
 import io.github.footermandev.tritium.io.VPath
 import io.github.footermandev.tritium.logger
 import io.github.footermandev.tritium.redactUserPath
@@ -14,11 +17,14 @@ import io.qt.gui.QGuiApplication
 import kotlinx.coroutines.*
 import kotlinx.serialization.json.*
 import java.io.File
+import java.nio.file.Files
 import java.util.*
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.CopyOnWriteArrayList
 import java.util.jar.JarFile
 
 /**
-* Responsible for preparing and launching a Minecraft instance for a project:
+ * Responsible for preparing and launching a Minecraft instance for a project:
  * - Ensures base MC + loader assets exist
  * - Builds merged version JSON + classpath/arguments
  * - Spawns the JVM process and streams early output
@@ -28,7 +34,35 @@ object GameLauncher {
     private val json = Json { ignoreUnknownKeys = true }
     private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private val pathSeparator = File.pathSeparator ?: ":"
+    private val ansiRegex = Regex("\\u001B\\[[;\\d]*[ -/]*[@-~]")
     private const val MAX_MISSING_LIB_LOG = 12
+    private val runtimePreparingScopes = ConcurrentHashMap<String, RuntimePreparationContext>()
+    private val runtimePreparationListeners = CopyOnWriteArrayList<(RuntimePreparationEvent) -> Unit>()
+
+    data class RuntimePreparationContext(
+        val projectScope: String,
+        val projectName: String,
+        val startedAtEpochMs: Long
+    )
+
+    data class RuntimePreparationEvent(
+        val type: Type,
+        val context: RuntimePreparationContext
+    ) {
+        enum class Type {
+            Started,
+            Finished
+        }
+    }
+
+    private data class LaunchSpec(
+        val meta: ModpackMeta,
+        val loader: ModLoader,
+        val mcVersion: String,
+        val loaderId: String,
+        val loaderVersion: String,
+        val mergedId: String
+    )
 
     /**
      * Attach project process tracking to an already-running process by [pid].
@@ -67,15 +101,56 @@ object GameLauncher {
         GameProcessMngr.addListener(listener)
 
     /**
+     * Subscribe to runtime preparation state changes.
+     */
+    fun addRuntimePreparationListener(listener: (RuntimePreparationEvent) -> Unit): () -> Unit {
+        runtimePreparationListeners += listener
+        return { runtimePreparationListeners -= listener }
+    }
+
+    /**
+     * Returns true while runtime setup/download is active for [project].
+     */
+    fun isRuntimePreparationActive(project: ProjectBase): Boolean =
+        runtimePreparingScopes.containsKey(scopeOf(project.path))
+
+    /**
+     * Returns true when runtime files are missing and need to be downloaded/materialized.
+     */
+    fun needsRuntimeDownload(project: ProjectBase): Boolean {
+        val spec = resolveLaunchSpec(project, logFailures = false) ?: return false
+        return hasMissingRuntime(spec, project.projectDir)
+    }
+
+    /**
+     * Ensure MC + loader runtime files exist for [project] without launching the game.
+     */
+    fun prepareRuntime(project: ProjectBase) {
+        val prepareCtx = beginRuntimePreparation(project) ?: return
+        scope.launch {
+            try {
+                prepareRuntimeInternal(project)
+            } catch (t: Throwable) {
+                logger.error("Runtime preparation failed for {}", project.name, t)
+            } finally {
+                endRuntimePreparation(prepareCtx)
+            }
+        }
+    }
+
+    /**
     * Public entry point for launching a project; executes asynchronously on IO scope.
      */
     fun launch(project: ProjectBase) {
+        val prepareCtx = beginRuntimePreparation(project) ?: return
         scope.launch {
-        try {
-            launchInternal(project)
-        } catch (t: Throwable) {
-            logger.error("Launch failed for {}", project.name, t)
-        }
+            try {
+                launchInternal(project)
+            } catch (t: Throwable) {
+                logger.error("Launch failed for {}", project.name, t)
+            } finally {
+                endRuntimePreparation(prepareCtx)
+            }
         }
     }
 
@@ -83,39 +158,15 @@ object GameLauncher {
     * Resolve metadata, ensure required files, and start the game process for a modpack project.
      */
     private suspend fun launchInternal(project: ProjectBase) {
-        if (project.typeId != "modpack") {
-            logger.warn("Launch is only supported for modpack projects (type={})", project.typeId)
-            return
-        }
-
-        val metaFile = project.projectDir.resolve("trmodpack.json")
-        val metaText = metaFile.readTextOrNull()
-        if (metaText.isNullOrBlank()) {
-            logger.warn("Cannot launch; trmodpack.json missing for project '{}'", project.name)
-            return
-        }
-
-        val meta = runCatching { json.decodeFromString(ModpackMeta.serializer(), metaText) }.getOrNull()
-        if (meta == null) {
-            logger.warn("Cannot launch; failed to parse trmodpack.json for project '{}'", project.name)
-            return
-        }
-
-        val mcVersion = meta.minecraftVersion
-        val loaderId = meta.loader
-        val loaderVersion = meta.loaderVersion
-        val mergedId = "$mcVersion-$loaderId-$loaderVersion"
-
-        val loader = BuiltinRegistries.ModLoader.all().find { it.id == loaderId }
-        if (loader == null) {
-            logger.warn("No mod loader registered for id={}", loaderId)
-            return
-        }
-
-        if (!ensureBaseAndLoader(meta, project.projectDir, loader)) {
+        val spec = resolveLaunchSpec(project, logFailures = true) ?: return
+        if (!ensureBaseAndLoader(spec.meta, project.projectDir, spec.loader)) {
             logger.warn("Cannot launch; required game files not ready for {}", project.name)
             return
         }
+        val mcVersion = spec.mcVersion
+        val loaderVersion = spec.loaderVersion
+        val mergedId = spec.mergedId
+        val loader = spec.loader
 
         val versionsDir = project.projectDir.resolve(".tr").resolve("versions")
         val mergedJson = versionsDir.resolve(mergedId).resolve("$mergedId.json")
@@ -224,14 +275,21 @@ object GameLauncher {
             "-Xms1G",
             "-Xmx2G"
         )
-        command += launchJvmArgs
         // Strip duplicate main-jar entries from the classpath
         val cpEntries = classpathEntries.filter { it.isNotBlank() }
         val dedupCp = cpEntries.distinct()
         val classpathToUse = dedupCp.joinToString(pathSeparator)
-        if (!launchJvmArgs.contains("-cp")) {
-            command += listOf("-cp", classpathToUse)
+        val cpIdx = launchJvmArgs.indexOf("-cp")
+        if (cpIdx >= 0) {
+            if (cpIdx + 1 < launchJvmArgs.size) {
+                launchJvmArgs[cpIdx + 1] = classpathToUse
+            } else {
+                launchJvmArgs += classpathToUse
+            }
+        } else {
+            launchJvmArgs += listOf("-cp", classpathToUse)
         }
+        command += launchJvmArgs
         command += mainClass
         command += gameArgs
 
@@ -248,11 +306,26 @@ object GameLauncher {
                 .directory(project.projectDir.toJFile())
                 .redirectErrorStream(true)
             processBuilder.environment()["TRITIUM_COMPANION_WS_TOKEN"] = companionToken
-            val process = withContext(Dispatchers.IO) { processBuilder.start() }
+            val process = withContext(IODispatchers.FileIO) { runInterruptible { processBuilder.start() } }
             GameProcessMngr.attachLaunched(project, process)
 
-            scope.launch(Dispatchers.IO) {
-                val exit = process.waitFor()
+            val outputJob = scope.launch(IODispatchers.FileIO) {
+                try {
+                    runInterruptible {
+                        process.inputStream.bufferedReader().useLines { lines ->
+                            lines.forEach { line ->
+                                logger.info("MC: {}", sanitizeMcOutputLine(line))
+                            }
+                        }
+                    }
+                } catch (t: Throwable) {
+                    logger.debug("Failed reading Minecraft process output stream", t)
+                }
+            }
+
+            scope.launch(IODispatchers.FileIO) {
+                val exit = runInterruptible { process.waitFor() }
+                outputJob.join()
                 logger.info("Minecraft exited with code {}", exit)
                 CompanionBridge.clearSessionToken()
             }
@@ -364,7 +437,7 @@ object GameLauncher {
             "\${user_type}" to "msa",
             "\${version_type}" to "release",
             "\${launcher_name}" to "Tritium",
-            "\${launcher_version}" to "0.0.0",
+            "\${launcher_version}" to TConstants.VERSION,
             "\${clientid}" to "",
             "\${auth_xuid}" to "",
             "\${resolution_width}" to launchResolution.first.toString(),
@@ -465,6 +538,7 @@ object GameLauncher {
     private fun buildJvmArgs(versionObj: JsonObject, gameDir: VPath, nativesDir: VPath, classpath: String): List<String> {
         val args = mutableListOf<String>()
         args += "-Djava.library.path=${nativesDir.toAbsolute()}"
+        args += "-Dorg.lwjgl.librarypath=${nativesDir.toAbsolute()}"
 
         val argumentsObj = versionObj["arguments"]?.jsonObject
         if (argumentsObj != null) {
@@ -475,7 +549,7 @@ object GameLauncher {
                 "\${library_directory}" to gameDir.resolve(".tr").resolve("libraries").toAbsolute().toString(),
                 "\${classpath}" to classpath,
                 "\${launcher_name}" to "Tritium",
-                "\${launcher_version}" to "0.0.0",
+                "\${launcher_version}" to TConstants.VERSION,
                 "\${version_name}" to (mergedId ?: ""),
                 "\${version_id}" to (mergedId ?: "")
             )
@@ -700,6 +774,11 @@ object GameLauncher {
     }
 
     /**
+     * Remove ANSI escape sequences from captured MC stdout/stderr for cleaner launcher logs.
+     */
+    private fun sanitizeMcOutputLine(line: String): String = ansiRegex.replace(line, "")
+
+    /**
      * Read a mainClass which may be a string or an object keyed by side.
      */
     private fun readMainClass(versionObj: JsonObject): String? {
@@ -725,7 +804,9 @@ object GameLauncher {
         val baseNeedsRefresh = if (!baseJson.exists()) {
             true
         } else {
-            !isBaseLibrariesHealthy(projectDir, baseJson) || !isNativeRuntimeHealthy(projectDir, mcVersion)
+            !isBaseLibrariesHealthy(projectDir, baseJson) ||
+                !isNativeRuntimeHealthy(projectDir, mcVersion) ||
+                !isAssetsHealthy(projectDir, baseJson, logIssues = false)
         }
         if (baseNeedsRefresh) {
             logger.info("Refreshing base Minecraft {} files and libraries", mcVersion)
@@ -733,6 +814,14 @@ object GameLauncher {
                 logger.warn("Failed to setup Minecraft {}", mcVersion)
                 return false
             }
+        }
+        if (
+            !isBaseLibrariesHealthy(projectDir, baseJson) ||
+            !isNativeRuntimeHealthy(projectDir, mcVersion) ||
+            !isAssetsHealthy(projectDir, baseJson)
+        ) {
+            logger.warn("Base Minecraft runtime is still unhealthy after refresh for {}", mcVersion)
+            return false
         }
 
         logger.info("Ensuring loader installed: {} {}", loaderId, loaderVersion)
@@ -758,7 +847,7 @@ object GameLauncher {
      * This catches stale/broken cache links (for example truncated jars) so setup can
      * re-materialize libraries before launch.
      */
-    private fun isBaseLibrariesHealthy(projectDir: VPath, baseJsonFile: VPath): Boolean {
+    private fun isBaseLibrariesHealthy(projectDir: VPath, baseJsonFile: VPath, logIssues: Boolean = true): Boolean {
         val baseText = baseJsonFile.readTextOrNull() ?: return false
         val baseObj = runCatching { json.parseToJsonElement(baseText).jsonObject }.getOrNull() ?: return false
         val libs = baseObj["libraries"]?.jsonArray ?: return true
@@ -777,7 +866,9 @@ object GameLauncher {
             val file = libsDir.resolve(path)
 
             if (!isUsableLibraryFile(file, expectedSize)) {
-                logger.warn("Base library is missing/corrupt: {}", file.toAbsolute().toString().redactUserPath())
+                if (logIssues) {
+                    logger.warn("Base library is missing/corrupt: {}", file.toAbsolute().toString().redactUserPath())
+                }
                 return false
             }
         }
@@ -788,10 +879,12 @@ object GameLauncher {
     /**
      * Validate that extracted native runtime binaries exist for the active platform.
      */
-    private fun isNativeRuntimeHealthy(projectDir: VPath, mcVersion: String): Boolean {
+    private fun isNativeRuntimeHealthy(projectDir: VPath, mcVersion: String, logIssues: Boolean = true): Boolean {
         val nativesDir = projectDir.resolve(".tr").resolve("natives").resolve(mcVersion)
         if (!nativesDir.exists() || !nativesDir.isDir()) {
-            logger.warn("Native runtime directory missing for Minecraft {}", mcVersion)
+            if (logIssues) {
+                logger.warn("Native runtime directory missing for Minecraft {}", mcVersion)
+            }
             return false
         }
 
@@ -800,7 +893,9 @@ object GameLauncher {
             Platform.isMacOS -> ".dylib"
             Platform.isLinux -> ".so"
             else -> {
-                logger.warn("Unknown platform '{}' while validating native runtime", Platform.name)
+                if (logIssues) {
+                    logger.warn("Unknown platform '{}' while validating native runtime", Platform.name)
+                }
                 return true
             }
         }
@@ -808,16 +903,20 @@ object GameLauncher {
         val hasNative = try {
             nativesDir.walk(recursive = true).any { it.isFile() && it.fileName().lowercase().endsWith(requiredExt) }
         } catch (t: Throwable) {
-            logger.warn("Failed to validate native runtime directory {}", nativesDir.toAbsolute().toString().redactUserPath(), t)
+            if (logIssues) {
+                logger.warn("Failed to validate native runtime directory {}", nativesDir.toAbsolute().toString().redactUserPath(), t)
+            }
             false
         }
 
         if (!hasNative) {
-            logger.warn(
-                "Native runtime for Minecraft {} is missing platform binaries (expected '*{}')",
-                mcVersion,
-                requiredExt
-            )
+            if (logIssues) {
+                logger.warn(
+                    "Native runtime for Minecraft {} is missing platform binaries (expected '*{}')",
+                    mcVersion,
+                    requiredExt
+                )
+            }
         }
         return hasNative
     }
@@ -860,5 +959,219 @@ object GameLauncher {
             logger.warn("... and {} more missing entries", remaining)
         }
         logger.warn("Tip: Use File -> Invalidate Caches, then launch again to regenerate runtime libraries.")
+    }
+
+    private suspend fun prepareRuntimeInternal(project: ProjectBase): Boolean {
+        val spec = resolveLaunchSpec(project, logFailures = true) ?: return false
+        val ready = ensureBaseAndLoader(spec.meta, project.projectDir, spec.loader)
+        if (!ready) {
+            logger.warn("Runtime preparation failed for {}", project.name)
+        } else {
+            val stillMissingReason = hasMissingRuntimeReason(spec, project.projectDir)
+            if (stillMissingReason != null) {
+                logger.warn(
+                    "Runtime preparation finished but runtime still reported as missing for '{}' (reason={})",
+                    project.name,
+                    stillMissingReason
+                )
+            } else {
+                logger.info("Runtime preparation finished for '{}'", project.name)
+            }
+        }
+        return ready
+    }
+
+    private fun resolveLaunchSpec(project: ProjectBase, logFailures: Boolean): LaunchSpec? {
+        if (project.typeId != "modpack") {
+            if (logFailures) {
+                logger.warn("Launch is only supported for modpack projects (type={})", project.typeId)
+            }
+            return null
+        }
+
+        val metaFile = project.projectDir.resolve("trmodpack.json")
+        val metaText = metaFile.readTextOrNull()
+        if (metaText.isNullOrBlank()) {
+            if (logFailures) {
+                logger.warn("Cannot launch; trmodpack.json missing for project '{}'", project.name)
+            }
+            return null
+        }
+
+        val meta = runCatching { json.decodeFromString(ModpackMeta.serializer(), metaText) }.getOrNull()
+        if (meta == null) {
+            if (logFailures) {
+                logger.warn("Cannot launch; failed to parse trmodpack.json for project '{}'", project.name)
+            }
+            return null
+        }
+
+        val mcVersion = meta.minecraftVersion
+        val loaderId = meta.loader
+        val loaderVersion = meta.loaderVersion
+        val mergedId = "$mcVersion-$loaderId-$loaderVersion"
+        val loader = BuiltinRegistries.ModLoader.all().find { it.id == loaderId }
+        if (loader == null) {
+            if (logFailures) {
+                logger.warn("No mod loader registered for id={}", loaderId)
+            }
+            return null
+        }
+
+        return LaunchSpec(
+            meta = meta,
+            loader = loader,
+            mcVersion = mcVersion,
+            loaderId = loaderId,
+            loaderVersion = loaderVersion,
+            mergedId = mergedId
+        )
+    }
+
+    private fun hasMissingRuntime(spec: LaunchSpec, projectDir: VPath): Boolean {
+        return hasMissingRuntimeReason(spec, projectDir) != null
+    }
+
+    private fun hasMissingRuntimeReason(spec: LaunchSpec, projectDir: VPath): String? {
+        val mcVersion = spec.mcVersion
+        val mergedId = spec.mergedId
+        val versionsDir = projectDir.resolve(".tr").resolve("versions")
+        val baseJson = versionsDir.resolve(mcVersion).resolve("$mcVersion.json")
+        if (!baseJson.exists()) return "base_version_json_missing"
+        if (!isBaseLibrariesHealthy(projectDir, baseJson, logIssues = false)) return "base_libraries_missing_or_corrupt"
+        if (!isNativeRuntimeHealthy(projectDir, mcVersion, logIssues = false)) return "native_runtime_missing_or_invalid"
+        if (!isAssetsHealthy(projectDir, baseJson, logIssues = false)) return "assets_missing_or_invalid"
+
+        val mergedJson = versionsDir.resolve(mergedId).resolve("$mergedId.json")
+        if (!mergedJson.exists()) return "merged_version_json_missing"
+
+        val mergedJar = versionsDir.resolve(mergedId).resolve("$mergedId.jar")
+        val baseJar = versionsDir.resolve(mcVersion).resolve("$mcVersion.jar")
+        val mainJar = if (isUsableLibraryFile(mergedJar, expectedSize = null)) mergedJar else baseJar
+        if (!isUsableLibraryFile(mainJar, expectedSize = null)) return "main_jar_missing_or_invalid"
+
+        val mergedText = mergedJson.readTextOrNull()
+        if (mergedText.isNullOrBlank()) return "merged_version_json_empty"
+        val mergedObj = runCatching { json.parseToJsonElement(mergedText).jsonObject }.getOrNull()
+            ?: return "merged_version_json_invalid"
+        if (readMainClass(mergedObj).isNullOrBlank()) return "merged_main_class_missing"
+        if (!isLoaderMetadataPresent(spec.loaderId, projectDir)) return "loader_metadata_missing"
+
+        return null
+    }
+
+    private fun isLoaderMetadataPresent(loaderId: String, projectDir: VPath): Boolean {
+        val loaderRoot = projectDir.resolve(".tr").resolve("loader").resolve(loaderId)
+        if (!loaderRoot.exists() || !loaderRoot.isDir()) return false
+
+        return when (loaderId) {
+            "fabric" -> loaderRoot.resolve("launcher-meta.json").exists()
+            "neoforge" -> {
+                loaderRoot.resolve("version.json").exists() &&
+                    loaderRoot.resolve("install_profile.json").exists()
+            }
+            else -> loaderRoot.listFiles { it.isFile() }.isNotEmpty()
+        }
+    }
+
+    private fun isAssetsHealthy(projectDir: VPath, baseJsonFile: VPath, logIssues: Boolean = true): Boolean {
+        val baseText = baseJsonFile.readTextOrNull()
+        if (baseText.isNullOrBlank()) {
+            if (logIssues) logger.warn("Cannot validate assets; base version JSON missing: {}", baseJsonFile.toAbsolute().toString().redactUserPath())
+            return false
+        }
+        val baseObj = runCatching { json.parseToJsonElement(baseText).jsonObject }.getOrNull()
+        if (baseObj == null) {
+            if (logIssues) logger.warn("Cannot validate assets; base version JSON is invalid: {}", baseJsonFile.toAbsolute().toString().redactUserPath())
+            return false
+        }
+
+        val assetIndexId = baseObj["assetIndex"]?.jsonObject?.get("id")?.jsonPrimitive?.contentOrNull
+        if (assetIndexId.isNullOrBlank()) {
+            if (logIssues) logger.warn("Cannot validate assets; assetIndex.id missing in {}", baseJsonFile.toAbsolute().toString().redactUserPath())
+            return false
+        }
+
+        val assetsDir = projectDir.resolve(".tr").resolve("assets")
+        val indexFile = assetsDir.resolve("indexes").resolve("$assetIndexId.json")
+        val indexText = indexFile.readTextOrNull()
+        if (indexText.isNullOrBlank()) {
+            if (logIssues) logger.warn("Asset index {} is missing for runtime assets check", assetIndexId)
+            return false
+        }
+
+        val indexObj = runCatching { json.parseToJsonElement(indexText).jsonObject }.getOrNull()
+        if (indexObj == null) {
+            if (logIssues) logger.warn("Asset index {} is invalid JSON", assetIndexId)
+            return false
+        }
+
+        val objects = indexObj["objects"]?.jsonObject
+        if (objects == null) {
+            if (logIssues) logger.warn("Asset index {} has no objects map", assetIndexId)
+            return false
+        }
+
+        val objectsDir = assetsDir.resolve("objects")
+        for ((_, value) in objects) {
+            val obj = value as? JsonObject ?: return false
+            val hash = obj["hash"]?.jsonPrimitive?.contentOrNull ?: return false
+            if (hash.length < 2) return false
+            val expectedSize = obj["size"]?.jsonPrimitive?.longOrNull
+            val file = objectsDir.resolve(hash.substring(0, 2)).resolve(hash)
+            val size = file.sizeOrNull()
+            if (size == null || size <= 0L) return false
+            if (expectedSize != null && expectedSize > 0L && size != expectedSize) return false
+        }
+
+        return true
+    }
+
+    private fun beginRuntimePreparation(project: ProjectBase): RuntimePreparationContext? {
+        val scope = scopeOf(project.path)
+        val ctx = RuntimePreparationContext(
+            projectScope = scope,
+            projectName = project.name,
+            startedAtEpochMs = System.currentTimeMillis()
+        )
+        val existing = runtimePreparingScopes.putIfAbsent(scope, ctx)
+        if (existing != null) {
+            logger.debug("Runtime preparation already active for project '{}'", project.name)
+            return null
+        }
+        emitRuntimePreparation(RuntimePreparationEvent(RuntimePreparationEvent.Type.Started, ctx))
+        return ctx
+    }
+
+    private fun endRuntimePreparation(context: RuntimePreparationContext) {
+        val removed = runtimePreparingScopes.remove(context.projectScope, context)
+        if (removed) {
+            emitRuntimePreparation(RuntimePreparationEvent(RuntimePreparationEvent.Type.Finished, context))
+        }
+    }
+
+    private fun emitRuntimePreparation(event: RuntimePreparationEvent) {
+        runtimePreparationListeners.forEach { listener ->
+            try {
+                listener(event)
+            } catch (t: Throwable) {
+                logger.warn("Runtime preparation listener failed", t)
+            }
+        }
+    }
+
+    private fun scopeOf(path: VPath): String {
+        val abs = path.toAbsolute().normalize()
+        return try {
+            val jPath = abs.toJPath()
+            val canonical = if (Files.exists(jPath)) {
+                jPath.toRealPath()
+            } else {
+                jPath.toAbsolutePath().normalize()
+            }
+            canonical.toString().trim()
+        } catch (_: Throwable) {
+            abs.toString().trim()
+        }
     }
 }

@@ -200,7 +200,7 @@ class LogAppender : AppenderBase<ILoggingEvent>() {
     override fun start() {
         val ctx = context ?: return
         patternLayout.context = ctx
-        patternLayout.pattern = "%d{yyyy-MM-dd HH:mm:ss.SSS} [%thread] %-5level %logger - %msg%n%ex"
+        patternLayout.pattern = "[%d{HH:mm:ss}] [%thread/%level] [%logger]: %msg%n%ex"
         patternLayout.start()
         Logs.prepareForLaunch()
         super.start()

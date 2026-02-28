@@ -88,6 +88,9 @@ jobs:
           if [[ "${GITHUB_REF:-}" == refs/tags/v* ]]; then
             raw="${GITHUB_REF#refs/tags/v}"
           fi
+          if [[ -z "$raw" && "${GITHUB_EVENT_NAME:-}" == "workflow_dispatch" && -n "${DISPATCH_TAG:-}" ]]; then
+            raw="${DISPATCH_TAG#v}"
+          fi
           if [[ -z "$raw" ]]; then
             raw="$(sed -nE 's/^version[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' build.gradle.kts | head -n1 || true)"
           fi
@@ -100,6 +103,8 @@ jobs:
           major="${parts[0]:-0}"
           minor="${parts[1]:-0}"
           build_from_source="${parts[2]:-}"
+          major_num="$((10#$major))"
+          minor_num="$((10#$minor))"
 
           is_release_build=false
           if [[ "${GITHUB_REF:-}" == refs/tags/v* ]]; then
@@ -109,45 +114,56 @@ jobs:
             is_release_build=true
           fi
 
+          next_series_build() {
+            local major_series="$1"
+            local minor_series="$2"
+            local page=1
+            local max_seen=0
+
+            while :; do
+              local payload
+              if ! payload="$(curl -fsSL \
+                -H "Authorization: Bearer $GH_TOKEN" \
+                -H "Accept: application/vnd.github+json" \
+                "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases?per_page=100&page=${page}")"; then
+                break
+              fi
+
+              local page_count
+              page_count="$(echo "$payload" | sed -nE 's/^[[:space:]]*"tag_name":[[:space:]]*"([^"]+)".*/\1/p' | wc -l | tr -d '[:space:]')"
+
+              while IFS= read -r tag; do
+                if [[ "$tag" =~ ^v${major_series}\.${minor_series}\.([0-9]+)($|[^0-9].*) ]]; then
+                  local build_patch="${BASH_REMATCH[1]}"
+                  local build_patch_num="$((10#$build_patch))"
+                  if [[ "$build_patch_num" -gt "$max_seen" ]]; then
+                    max_seen="$build_patch_num"
+                  fi
+                fi
+              done < <(echo "$payload" | sed -nE 's/^[[:space:]]*"tag_name":[[:space:]]*"([^"]+)".*/\1/p')
+
+              if [[ ! "$page_count" =~ ^[0-9]+$ || "$page_count" -lt 100 ]]; then
+                break
+              fi
+              page=$((page + 1))
+            done
+
+            echo "$((max_seen + 1))"
+          }
+
           build_number=""
           if [[ "$is_release_build" == "true" ]]; then
-            headers_file="$(mktemp)"
-            body_file="$(mktemp)"
-            release_count=""
-
-            if curl -fsSL \
-              -H "Authorization: Bearer $GH_TOKEN" \
-              -H "Accept: application/vnd.github+json" \
-              -D "$headers_file" \
-              -o "$body_file" \
-              "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases?per_page=1&page=1"; then
-              body_compact="$(tr -d '[:space:]' < "$body_file")"
-              if [[ "$body_compact" == "[]" ]]; then
-                release_count="0"
-              else
-                last_page="$(grep -i '^link:' "$headers_file" | sed -nE 's/.*[?&]page=([0-9]+)>; rel=\"last\".*/\1/p' | tail -n1)"
-                if [[ "$last_page" =~ ^[0-9]+$ ]]; then
-                  release_count="$last_page"
-                else
-                  release_count="1"
-                fi
-              fi
-            fi
-            rm -f "$headers_file" "$body_file"
-
-            if [[ "$release_count" =~ ^[0-9]+$ ]]; then
-              build_number="$((release_count + 1))"
+            if [[ "$build_from_source" =~ ^[0-9]+$ ]]; then
+              build_number="$((10#$build_from_source))"
             else
-              build_number="${GITHUB_RUN_NUMBER:-0}"
+              build_number="$(next_series_build "$major_num" "$minor_num")"
             fi
           elif [[ "$build_from_source" =~ ^[0-9]+$ ]]; then
-            build_number="$build_from_source"
+            build_number="$((10#$build_from_source))"
           else
             build_number="${GITHUB_RUN_NUMBER:-0}"
           fi
 
-          major_num="$((10#$major))"
-          minor_num="$((10#$minor))"
           build_num="$((10#$build_number))"
 
           app_version="${major_num}.${minor_num}.${build_num}"
@@ -558,8 +574,47 @@ jobs:
       - name: Resolve Release Tag
         id: tag
         shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          next_series_build() {
+            local major_series="$1"
+            local minor_series="$2"
+            local page=1
+            local max_seen=0
+
+            while :; do
+              local payload
+              if ! payload="$(curl -fsSL \
+                -H "Authorization: Bearer $GH_TOKEN" \
+                -H "Accept: application/vnd.github+json" \
+                "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases?per_page=100&page=${page}")"; then
+                break
+              fi
+
+              local page_count
+              page_count="$(echo "$payload" | sed -nE 's/^[[:space:]]*"tag_name":[[:space:]]*"([^"]+)".*/\1/p' | wc -l | tr -d '[:space:]')"
+
+              while IFS= read -r tag; do
+                if [[ "$tag" =~ ^v${major_series}\.${minor_series}\.([0-9]+)($|[^0-9].*) ]]; then
+                  local build_patch="${BASH_REMATCH[1]}"
+                  local build_patch_num="$((10#$build_patch))"
+                  if [[ "$build_patch_num" -gt "$max_seen" ]]; then
+                    max_seen="$build_patch_num"
+                  fi
+                fi
+              done < <(echo "$payload" | sed -nE 's/^[[:space:]]*"tag_name":[[:space:]]*"([^"]+)".*/\1/p')
+
+              if [[ ! "$page_count" =~ ^[0-9]+$ || "$page_count" -lt 100 ]]; then
+                break
+              fi
+              page=$((page + 1))
+            done
+
+            echo "$((max_seen + 1))"
+          }
+
           if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
             echo "name=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
           elif [[ -n "${{ github.event.inputs.tag }}" ]]; then
@@ -575,7 +630,14 @@ jobs:
             if [[ -z "$cleaned" ]]; then
               cleaned="0.0.0"
             fi
-            echo "name=v${cleaned}-build.${GITHUB_RUN_NUMBER}" >> "$GITHUB_OUTPUT"
+            numeric="$(echo "$cleaned" | sed -E 's/[^0-9.]+/./g; s/\.+/./g; s/^\.//; s/\.$//')"
+            IFS='.' read -r -a parts <<< "$numeric"
+            major="${parts[0]:-0}"
+            minor="${parts[1]:-0}"
+            major_num="$((10#$major))"
+            minor_num="$((10#$minor))"
+            build_num="$(next_series_build "$major_num" "$minor_num")"
+            echo "name=v${major_num}.${minor_num}.${build_num}" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Create GitHub Release

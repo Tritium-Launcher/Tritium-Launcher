@@ -87,6 +87,8 @@ class ProjectViewWindow internal constructor(
 
     private var uiState: ProjectUIState = loadState()
     private var unsubscribeGameProcessListener: (() -> Unit)? = null
+    private var unsubscribeRuntimePreparationListener: (() -> Unit)? = null
+    private var unsubscribeTaskListener: (() -> Unit)? = null
 
     private val menuItemsRegistry = BuiltinRegistries.MenuItem
 
@@ -112,10 +114,26 @@ class ProjectViewWindow internal constructor(
                 rebuildMenus()
             }
         }
+        unsubscribeRuntimePreparationListener = GameLauncher.addRuntimePreparationListener {
+            runOnGuiThread {
+                if (!isVisible) return@runOnGuiThread
+                rebuildMenus()
+            }
+        }
+        unsubscribeTaskListener = ProjectTaskMngr.addListener {
+            runOnGuiThread {
+                if (!isVisible) return@runOnGuiThread
+                rebuildMenus()
+            }
+        }
 
         destroyed.connect {
             unsubscribeGameProcessListener?.invoke()
             unsubscribeGameProcessListener = null
+            unsubscribeRuntimePreparationListener?.invoke()
+            unsubscribeRuntimePreparationListener = null
+            unsubscribeTaskListener?.invoke()
+            unsubscribeTaskListener = null
         }
     }
 
@@ -165,7 +183,7 @@ class ProjectViewWindow internal constructor(
                 val state = ByteUtils.toByteArray(saveState().data())
                 val s = ProjectUIState(openFiles = openFiles, mainWindowState = state, mainWindowGeometry = geom)
                 val txt = json.encodeToString(s)
-                stateFile.writeBytes(txt.toByteArray())
+                stateFile.writeBytesAtomic(txt.toByteArray())
             } catch (t: Throwable) {
                 logger.warn("Failed to persist UI state for '{}'", project.name, t)
             }

@@ -6,9 +6,14 @@ import io.github.footermandev.tritium.extension.core.BuiltinRegistries
 import io.github.footermandev.tritium.logger
 import io.github.footermandev.tritium.m
 import io.github.footermandev.tritium.ui.theme.TColors
+import io.github.footermandev.tritium.ui.theme.TIcons
+import io.github.footermandev.tritium.ui.theme.qt.icon
 import io.github.footermandev.tritium.ui.theme.qt.setThemedStyle
 import io.github.footermandev.tritium.ui.widgets.constructor_functions.hBoxLayout
+import io.qt.core.QTimer
+import io.qt.core.Qt
 import io.qt.gui.QAction
+import io.qt.gui.QGuiApplication
 import io.qt.widgets.*
 
 /**
@@ -183,13 +188,36 @@ class ProjectMenuBar : QWidget() {
     private fun makeActionButton(window: QMainWindow, item: MenuItem, project: ProjectBase?, selection: Any?): QPushButton {
         val baseCtx = MenuActionContext(project, window, selection, item.meta)
         val iconOnly = item.meta["iconOnly"]?.equals("true", ignoreCase = true) == true
+        val useShiftHoverForceIcon = item.meta["shiftHoverForceIcon"]?.equals("true", ignoreCase = true) == true
         val btn = QPushButton(if (iconOnly) "" else item.title)
         btn.isFlat = true
-        btn.isEnabled = item.isEnabled(baseCtx)
-        btn.toolTip = item.tooltip.orEmpty()
-        item.resolveIcon(baseCtx)?.let { btn.icon = it }
+        btn.setMouseTracking(true)
+        fun refreshVisualState() {
+            val ctx = MenuActionContext(project, window, selection, item.meta)
+            btn.isEnabled = item.isEnabled(ctx)
+
+            val showForceIcon = useShiftHoverForceIcon &&
+                btn.isEnabled &&
+                btn.underMouse() &&
+                QGuiApplication.queryKeyboardModifiers().testFlag(Qt.KeyboardModifier.ShiftModifier)
+
+            val resolvedIcon = if (showForceIcon) TIcons.ForceStop.icon else item.resolveIcon(ctx)
+            resolvedIcon?.let { btn.icon = it }
+            btn.toolTip = if (showForceIcon) "Force-stop game process" else item.tooltip.orEmpty()
+        }
+        refreshVisualState()
         if (iconOnly) {
             btn.setProperty("menuIconOnly", true)
+        }
+        if (useShiftHoverForceIcon) {
+            val stateTimer = QTimer(btn).apply {
+                interval = 50
+                timeout.connect { refreshVisualState() }
+                start()
+            }
+            btn.destroyed.connect {
+                stateTimer.stop()
+            }
         }
         btn.clicked.connect {
             try {
@@ -198,6 +226,7 @@ class ProjectMenuBar : QWidget() {
             } catch (t: Throwable) {
                 logger.warn("Menu action '{}' failed", item.id, t)
             }
+            refreshVisualState()
         }
         return btn
     }

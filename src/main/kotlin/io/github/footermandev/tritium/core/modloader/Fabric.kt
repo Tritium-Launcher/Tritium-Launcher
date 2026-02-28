@@ -3,6 +3,7 @@ package io.github.footermandev.tritium.core.modloader
 import io.github.footermandev.tritium.TConstants
 import io.github.footermandev.tritium.core.modloader.fabric.LoaderCompatibility
 import io.github.footermandev.tritium.fromTR
+import io.github.footermandev.tritium.io.IODispatchers
 import io.github.footermandev.tritium.io.VPath
 import io.github.footermandev.tritium.io.linkOrCopyFromCache
 import io.github.footermandev.tritium.logger
@@ -17,14 +18,19 @@ import io.ktor.client.plugins.*
 import io.ktor.client.plugins.contentnegotiation.*
 import io.ktor.client.request.*
 import io.ktor.client.statement.*
+import io.ktor.http.*
 import io.ktor.serialization.kotlinx.json.*
 import io.qt.gui.QPixmap
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
+import kotlinx.coroutines.*
+import kotlinx.coroutines.sync.Semaphore
+import kotlinx.coroutines.sync.withPermit
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.*
+import java.io.ByteArrayInputStream
 import java.io.File
 import java.net.URI
+import java.util.jar.JarFile
+import java.util.zip.ZipInputStream
 import javax.xml.parsers.DocumentBuilderFactory
 
 /**
@@ -34,6 +40,11 @@ import javax.xml.parsers.DocumentBuilderFactory
  * - installs required libraries + launcher metadata into an instance.
  */
 class Fabric : ModLoader(), Registrable {
+    private companion object {
+        const val LIBS_CONCURRENCY_MIN = 8
+        const val LIBS_CONCURRENCY_MAX = 20
+    }
+
     override val id: String = "fabric"
     override val displayName: String = "Fabric"
     override val repository: URI = "https://maven.fabricmc.net/net/fabricmc/fabric-loader/".toURI()
@@ -53,6 +64,16 @@ class Fabric : ModLoader(), Registrable {
             requestTimeoutMillis = 60_000
             connectTimeoutMillis = 15_000
             socketTimeoutMillis = 60_000
+        }
+        install(HttpRequestRetry) {
+            maxRetries = 3
+            retryOnExceptionOrServerErrors(maxRetries = 3)
+            retryIf { _, response ->
+                response.status.value == 429 || response.status.value == 408
+            }
+            delayMillis { retry ->
+                (500L * (1L shl (retry - 1))).coerceAtMost(5000L)
+            }
         }
         defaultRequest {
             header("User-Agent", ClientIdentity.userAgent)
@@ -83,9 +104,10 @@ class Fabric : ModLoader(), Registrable {
             }
             val urlStr = downloadUri.toString()
             logger.info("Downloading Fabric Loader...")
-            val data: ByteArray = client.get(urlStr).bodyAsBytes()
+            val data: ByteArray = downloadBytesChecked(urlStr)
+            validateJarBytesOrThrow("fabric-loader-$version.jar", data)
             val file = dir.resolve("fabric-loader-$version.jar")
-            file.writeBytes(data)
+            file.writeBytesAtomic(data)
             logger.info("Downloaded Fabric Loader version {}", version)
             true
         } catch (e: Exception) {
@@ -262,13 +284,13 @@ class Fabric : ModLoader(), Registrable {
 
             val outDir = targetDir.resolve(".tr").resolve("loader").resolve(id)
             outDir.mkdirs()
-            outDir.resolve("launcher-meta.json").writeBytes(metaText.toByteArray())
+            outDir.resolve("launcher-meta.json").writeBytesAtomic(metaText.toByteArray())
             val patch = buildJsonObject {
                 launcherMeta["mainClass"]?.let { put("mainClass", it) }
                 launcherMeta["arguments"]?.let { put("arguments", it) }
                 put("libraries", libsWithExtras)
             }
-            outDir.resolve("version_patch.json").writeBytes(json.encodeToString(patch).toByteArray())
+            outDir.resolve("version_patch.json").writeBytesAtomic(json.encodeToString(patch).toByteArray())
             logger.info("Fabric install finished for {} {}", mcVersion, version)
             true
         } catch (e: Exception) {
@@ -336,50 +358,142 @@ class Fabric : ModLoader(), Registrable {
     /**
         * Ensure all Fabric libraries in [libs] exist under the instance `.tr/libraries` directory.
         */
-    private suspend fun downloadLibraries(libs: JsonArray, targetDir: VPath) {
+    private suspend fun downloadLibraries(libs: JsonArray, targetDir: VPath) = withContext(IODispatchers.BulkIO) {
         val baseDir = targetDir.resolve(".tr").resolve("libraries")
         val sharedLibsDir = fromTR(TConstants.Dirs.CACHE).resolve("libraries")
-        for ((idx, el) in libs.withIndex()) {
-            val obj = el as? JsonObject ?: continue
-            val artifact = obj["downloads"]?.jsonObject
-                ?.get("artifact")?.jsonObject
-            val artUrl = artifact?.get("url")?.jsonPrimitive?.contentOrNull
-            val artPath = artifact?.get("path")?.jsonPrimitive?.contentOrNull
+        val entries = libs.mapNotNull { it as? JsonObject }
+        val total = entries.size
+        val concurrency = chooseLibraryConcurrency(total)
+        logger.info("Fabric libraries: {} to ensure, concurrency={}", total, concurrency)
+        val semaphore = Semaphore(concurrency)
+        val startedAt = System.currentTimeMillis()
+        var completed = 0
 
-            if(artUrl != null && artPath != null) {
-                val dest = baseDir.resolve(artPath)
-                val cache = sharedLibsDir.resolve(artPath)
-                if (linkOrCopyFromCache(cache, dest)) {
-                    continue
-                }
-                if(!dest.exists()) {
-                    logger.debug("fabric lib [{}/{}] {}", idx+1, libs.size, artPath)
-                    dest.parent().mkdirs()
-                    val bytes = client.get(artUrl).bodyAsBytes()
-                    cache.parent().mkdirs()
-                    cache.writeBytes(bytes)
-                    if (!linkOrCopyFromCache(cache, dest)) {
-                        dest.writeBytes(bytes)
+        coroutineScope {
+            entries.withIndex().map { (idx, obj) ->
+                launch {
+                    semaphore.withPermit {
+                        try {
+                            val artifact = obj["downloads"]?.jsonObject
+                                ?.get("artifact")?.jsonObject
+                            val artUrl = artifact?.get("url")?.jsonPrimitive?.contentOrNull
+                            val artPath = artifact?.get("path")?.jsonPrimitive?.contentOrNull
+
+                            if(artUrl != null && artPath != null) {
+                                val dest = baseDir.resolve(artPath)
+                                val cache = sharedLibsDir.resolve(artPath)
+                                val expectedSize = artifact["size"]?.jsonPrimitive?.longOrNull
+                                if (!isUsableLibraryArtifact(dest, expectedSize)) {
+                                    if (!linkOrCopyFromCache(cache, dest) || !isUsableLibraryArtifact(dest, expectedSize)) {
+                                        if (dest.exists()) dest.delete()
+                                        if (cache.exists() && !isUsableLibraryArtifact(cache, expectedSize)) {
+                                            cache.delete()
+                                        }
+                                    logger.debug("fabric lib [{}/{}] {}", idx + 1, total, artPath)
+                                    dest.parent().mkdirs()
+                                    val bytes = downloadBytesChecked(artUrl)
+                                    if (expectedSize != null && expectedSize > 0L && bytes.size.toLong() != expectedSize) {
+                                        throw IllegalStateException(
+                                            "Fabric artifact size mismatch for $artPath: got ${bytes.size}, expected $expectedSize"
+                                        )
+                                    }
+                                    validateJarBytesOrThrow(artPath, bytes)
+                                    cache.parent().mkdirs()
+                                    cache.writeBytesAtomic(bytes)
+                                    if (!linkOrCopyFromCache(cache, dest)) {
+                                        dest.writeBytesAtomic(bytes)
+                                    }
+                                    }
+                                }
+                                return@withPermit
+                            }
+
+                            val name = obj["name"]?.jsonPrimitive?.contentOrNull ?: return@withPermit
+                            val url = obj["url"]?.jsonPrimitive?.contentOrNull ?: "https://maven.fabricmc.net/"
+                            val path = mavenPath(name)
+                            val dest = baseDir.resolve(path)
+                            val cache = sharedLibsDir.resolve(path)
+                            if (!isUsableLibraryArtifact(dest, expectedSize = null)) {
+                                if (!linkOrCopyFromCache(cache, dest) || !isUsableLibraryArtifact(dest, expectedSize = null)) {
+                                    if (dest.exists()) dest.delete()
+                                    if (cache.exists() && !isUsableLibraryArtifact(cache, expectedSize = null)) {
+                                        cache.delete()
+                                    }
+                                    logger.debug("fabric maven lib [{}/{}] {}", idx + 1, total, path)
+                                    dest.parent().mkdirs()
+                                    val bytes = downloadBytesChecked(url.trimEnd('/') + "/" + path)
+                                    validateJarBytesOrThrow(path, bytes)
+                                    cache.parent().mkdirs()
+                                    cache.writeBytesAtomic(bytes)
+                                    if (!linkOrCopyFromCache(cache, dest)) {
+                                        dest.writeBytesAtomic(bytes)
+                                    }
+                                }
+                            }
+                        } catch (t: Throwable) {
+                            val name = obj["name"]?.jsonPrimitive?.contentOrNull ?: "unknown"
+                            logger.warn("Failed to download Fabric library {}", name, t)
+                        } finally {
+                            val done = synchronized(this@Fabric) { ++completed }
+                            if (done % 40 == 0 || done == total) {
+                                val elapsed = System.currentTimeMillis() - startedAt
+                                logger.info("Fabric libraries progress {}/{} ({} ms)", done, total, elapsed)
+                            }
+                        }
                     }
                 }
-                continue
-            }
+            }.joinAll()
+        }
 
-            val name = obj["name"]?.jsonPrimitive?.contentOrNull ?: continue
-            val url = obj["url"]?.jsonPrimitive?.contentOrNull ?: "https://maven.fabricmc.net/"
-            val path = mavenPath(name)
-            val dest = baseDir.resolve(path)
-            val cache = sharedLibsDir.resolve(path)
-            if (linkOrCopyFromCache(cache, dest)) continue
-            if(dest.exists()) continue
-            logger.debug("fabric maven lib [{}/{}] {}", idx+1, libs.size, path)
-            dest.parent().mkdirs()
-            val bytes = client.get(url.trimEnd('/') + "/" + path).bodyAsBytes()
-            cache.parent().mkdirs()
-            cache.writeBytes(bytes)
-            if (!linkOrCopyFromCache(cache, dest)) {
-                dest.writeBytes(bytes)
+        logger.info("Fabric libraries complete in {} ms", System.currentTimeMillis() - startedAt)
+    }
+
+    private fun chooseLibraryConcurrency(total: Int): Int {
+        val cores = Runtime.getRuntime().availableProcessors().coerceAtLeast(2)
+        val target = when {
+            total >= 1_000 -> 20
+            total >= 500 -> 16
+            else -> 12
+        }
+        return (cores * 3).coerceIn(LIBS_CONCURRENCY_MIN, minOf(target, LIBS_CONCURRENCY_MAX))
+    }
+
+    private suspend fun downloadBytesChecked(url: String, timeoutMs: Long = 45_000L): ByteArray = withTimeout(timeoutMs) {
+        val response = client.get(url)
+        if (!response.status.isSuccess()) {
+            throw IllegalStateException("HTTP ${response.status.value} downloading '$url'")
+        }
+        response.bodyAsBytes()
+    }
+
+    private fun validateJarBytesOrThrow(path: String, bytes: ByteArray) {
+        if (!path.endsWith(".jar", ignoreCase = true)) return
+        if (!isValidJarBytes(bytes)) {
+            throw IllegalStateException("Downloaded Fabric jar is invalid: $path")
+        }
+    }
+
+    private fun isUsableLibraryArtifact(path: VPath, expectedSize: Long?): Boolean {
+        if (!path.exists()) return false
+        val size = path.sizeOrNull() ?: return false
+        if (size <= 0L) return false
+        if (expectedSize != null && expectedSize > 0L && size != expectedSize) return false
+        if (!path.fileName().endsWith(".jar", ignoreCase = true)) return true
+        return try {
+            JarFile(path.toJFile()).use { true }
+        } catch (_: Throwable) {
+            false
+        }
+    }
+
+    private fun isValidJarBytes(bytes: ByteArray): Boolean {
+        if (bytes.size < 4) return false
+        return try {
+            ZipInputStream(ByteArrayInputStream(bytes)).use { zis ->
+                zis.nextEntry != null
             }
+        } catch (_: Throwable) {
+            false
         }
     }
 

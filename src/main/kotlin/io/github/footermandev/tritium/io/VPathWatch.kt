@@ -1,10 +1,13 @@
 package io.github.footermandev.tritium.io
 
 import io.github.footermandev.tritium.io.VPath.Companion.parse
+import io.github.footermandev.tritium.logger
 import io.ktor.utils.io.core.*
 import kotlinx.coroutines.*
+import kotlinx.coroutines.channels.BufferOverflow
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.buffer
 import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.flow.flowOn
 import java.nio.file.*
@@ -13,11 +16,17 @@ import java.nio.file.attribute.BasicFileAttributes
 import java.util.concurrent.TimeUnit
 import kotlin.coroutines.CoroutineContext
 
+private val watchLogger = logger(VPath::class)
+
 data class VWatchOptions(
     val recursive: Boolean = false,
     val followSymLinks: Boolean = false,
     val kinds: List<WatchEvent.Kind<Path>> = listOf(ENTRY_CREATE, ENTRY_DELETE, ENTRY_MODIFY),
-    val pollTimeoutMillis: Long = 0L
+    val pollTimeoutMillis: Long = 0L,
+    val flowBufferCapacity: Int = 512,
+    val dropOldestOnBackpressure: Boolean = true,
+    val rescanOnOverflow: Boolean = true,
+    val logDroppedFlowEvents: Boolean = true
 )
 
 data class VWatchEvent(
@@ -72,7 +81,7 @@ class VPathWatcher internal constructor(
     fun registeredDirectories(): List<VPath> = registeredKeys.values.toList()
 }
 
-private fun registerDirToService(dir: Path, service: WatchService, kinds: List<WatchEvent.Kind<Path>>, followSymLinks: Boolean): WatchKey {
+private fun registerDirToService(dir: Path, service: WatchService, kinds: List<WatchEvent.Kind<Path>>): WatchKey {
     return dir.register(service, kinds.toTypedArray())
 }
 
@@ -85,7 +94,7 @@ private fun asPathKind(kind: WatchEvent.Kind<*>): WatchEvent.Kind<Path> = kind a
 fun VPath.watch(
     callback: (VWatchEvent) -> Unit,
     options: VWatchOptions = VWatchOptions(),
-    ctx: CoroutineContext = Dispatchers.IO
+    ctx: CoroutineContext = IODispatchers.WatchIO
 ): VPathWatcher {
     val rootJ = this.toJPath()
 
@@ -96,7 +105,8 @@ fun VPath.watch(
     val service = FileSystems.getDefault().newWatchService()
 
     val registered = HashMap<WatchKey, VPath>()
-    
+    val registeredDirs = HashSet<Path>()
+
     fun register(startPath: Path) {
         if(!Files.isDirectory(startPath)) return
         Files.walkFileTree(startPath, object : SimpleFileVisitor<Path>() {
@@ -105,8 +115,10 @@ fun VPath.watch(
                 attrs: BasicFileAttributes
             ): FileVisitResult {
                 if(!options.followSymLinks && Files.isSymbolicLink(dir)) return FileVisitResult.SKIP_SUBTREE
-                val key = registerDirToService(dir, service, options.kinds, options.followSymLinks)
-                registered[key] = parse(dir.toString()).toAbsolute()
+                val normalized = dir.toAbsolutePath().normalize()
+                if (!registeredDirs.add(normalized)) return FileVisitResult.CONTINUE
+                val key = registerDirToService(dir, service, options.kinds)
+                registered[key] = parse(dir.toString()).toAbsolute().normalize()
                 return FileVisitResult.CONTINUE
             }
         })
@@ -115,20 +127,25 @@ fun VPath.watch(
     if(options.recursive) {
         register(rootJ)
     } else {
-        val key = registerDirToService(rootJ, service, options.kinds, options.followSymLinks)
+        val key = registerDirToService(rootJ, service, options.kinds)
         registered[key] = this.toAbsolute()
+        registeredDirs.add(rootJ.toAbsolutePath().normalize())
     }
 
     val scope = CoroutineScope(ctx + SupervisorJob())
     val job = scope.launch {
         try {
             while(isActive) {
-                val key = if(options.pollTimeoutMillis > 0) {
-                    service.poll(options.pollTimeoutMillis, TimeUnit.MILLISECONDS)
-                } else {
-                    try {
-                        service.take()
-                    } catch (ise: InterruptedException) { null }
+                val key = try {
+                    if (options.pollTimeoutMillis > 0) {
+                        runInterruptible { service.poll(options.pollTimeoutMillis, TimeUnit.MILLISECONDS) }
+                    } else {
+                        runInterruptible { service.take() }
+                    }
+                } catch (_: InterruptedException) {
+                    null
+                } catch (_: ClosedWatchServiceException) {
+                    null
                 } ?: continue
 
                 val watchedBaseV = registered[key] ?: this@watch.toAbsolute()
@@ -140,7 +157,13 @@ fun VPath.watch(
                     try {
                         callback(ve)
                     } catch (t: Throwable) {
-                        logger.error("Exception in watch callback for event $ve", t)
+                        watchLogger.error("Exception in watch callback for event {}", ve, t)
+                    }
+
+                    if (options.recursive && kind == OVERFLOW && options.rescanOnOverflow) {
+                        runCatching { register(watchedBaseV.toJPath()) }
+                            .onFailure { watchLogger.warn("Failed to rescan watch tree after overflow for {}", watchedBaseV, it) }
+                        continue
                     }
 
                     if(options.recursive && kind == ENTRY_CREATE) {
@@ -159,12 +182,15 @@ fun VPath.watch(
 
                 val valid = key.reset()
                 if(!valid) {
-                    registered.remove(key)
+                    val removed = registered.remove(key)
+                    if (removed != null) {
+                        runCatching { registeredDirs.remove(removed.toJPath().toAbsolutePath().normalize()) }
+                    }
                     if(registered.isEmpty()) break
                 }
             }
         } catch (t: Throwable) {
-            logger.warn("VPath watch loop terminated due to error", t)
+            watchLogger.warn("VPath watch loop terminated due to error", t)
         } finally {
 
         }
@@ -176,14 +202,42 @@ fun VPath.watch(
 fun VPath.watchAsFlow(options: VWatchOptions = VWatchOptions()): Flow<VWatchEvent> = callbackFlow {
     val service = FileSystems.getDefault().newWatchService()
     val registered = HashMap<WatchKey, VPath>()
+    val registeredDirs = HashSet<Path>()
+    var droppedEvents = 0L
+
+    fun sendEvent(event: VWatchEvent) {
+        val sent = trySend(event).isSuccess
+        if (sent) {
+            if (droppedEvents > 0 && options.logDroppedFlowEvents) {
+                watchLogger.warn(
+                    "Watch flow recovered after dropping {} events for {}",
+                    droppedEvents,
+                    this@watchAsFlow.toAbsolute()
+                )
+            }
+            droppedEvents = 0L
+            return
+        }
+
+        droppedEvents++
+        if (options.logDroppedFlowEvents && (droppedEvents == 1L || droppedEvents % 128L == 0L)) {
+            watchLogger.warn(
+                "Watch flow dropped {} events for {} due to backpressure",
+                droppedEvents,
+                this@watchAsFlow.toAbsolute()
+            )
+        }
+    }
 
     fun register(startPath: Path) {
         if (!Files.isDirectory(startPath)) return
         Files.walkFileTree(startPath, object : SimpleFileVisitor<Path>() {
             override fun preVisitDirectory(dir: Path, attrs: BasicFileAttributes): FileVisitResult {
                 if (!options.followSymLinks && Files.isSymbolicLink(dir)) return FileVisitResult.SKIP_SUBTREE
-                val key = registerDirToService(dir, service, options.kinds, options.followSymLinks)
-                registered[key] = parse(dir.toString()).toAbsolute()
+                val normalized = dir.toAbsolutePath().normalize()
+                if (!registeredDirs.add(normalized)) return FileVisitResult.CONTINUE
+                val key = registerDirToService(dir, service, options.kinds)
+                registered[key] = parse(dir.toString()).toAbsolute().normalize()
                 return FileVisitResult.CONTINUE
             }
         })
@@ -192,24 +246,38 @@ fun VPath.watchAsFlow(options: VWatchOptions = VWatchOptions()): Flow<VWatchEven
     if (options.recursive) {
         register(this@watchAsFlow.toJPath())
     } else {
-        val key = registerDirToService(this@watchAsFlow.toJPath(), service, options.kinds, options.followSymLinks)
+        val key = registerDirToService(this@watchAsFlow.toJPath(), service, options.kinds)
         registered[key] = this@watchAsFlow.toAbsolute()
+        registeredDirs.add(this@watchAsFlow.toJPath().toAbsolutePath().normalize())
     }
 
-    val watcherJob = CoroutineScope(Dispatchers.IO + SupervisorJob()).launch {
+    val watcherJob = CoroutineScope(IODispatchers.WatchIO + SupervisorJob()).launch {
         try {
             while (isActive) {
-                val key = service.take()
+                val key = try {
+                    if (options.pollTimeoutMillis > 0) {
+                        runInterruptible { service.poll(options.pollTimeoutMillis, TimeUnit.MILLISECONDS) }
+                    } else {
+                        runInterruptible { service.take() }
+                    }
+                } catch (_: InterruptedException) {
+                    null
+                } catch (_: ClosedWatchServiceException) {
+                    null
+                } ?: continue
+
                 val base = registered[key] ?: this@watchAsFlow.toAbsolute()
 
                 for (ev in key.pollEvents()) {
                     val evPath = asPathEvent(ev)
                     val kind = ev.kind()
                     val vpe = VWatchEvent.fromWatchEvent(asPathKind(kind), base, evPath)
+                    sendEvent(vpe)
 
-                    try {
-                        trySend(vpe).isSuccess
-                    } catch (_: Exception) {
+                    if (options.recursive && kind == OVERFLOW && options.rescanOnOverflow) {
+                        runCatching { register(base.toJPath()) }
+                            .onFailure { watchLogger.warn("Failed to rescan watch tree after overflow for {}", base, it) }
+                        continue
                     }
 
                     if (options.recursive && kind == ENTRY_CREATE) {
@@ -229,7 +297,10 @@ fun VPath.watchAsFlow(options: VWatchOptions = VWatchOptions()): Flow<VWatchEven
 
                 val valid = key.reset()
                 if (!valid) {
-                    registered.remove(key)
+                    val removed = registered.remove(key)
+                    if (removed != null) {
+                        runCatching { registeredDirs.remove(removed.toJPath().toAbsolutePath().normalize()) }
+                    }
                     if (registered.isEmpty()) {
                         break
                     }
@@ -246,4 +317,9 @@ fun VPath.watchAsFlow(options: VWatchOptions = VWatchOptions()): Flow<VWatchEven
         try { watcherJob.cancel() } catch (_: Exception) {}
         try { service.close() } catch (_: Exception) {}
     }
-}.flowOn(Dispatchers.IO)
+}
+    .buffer(
+        capacity = options.flowBufferCapacity.coerceAtLeast(1),
+        onBufferOverflow = if (options.dropOldestOnBackpressure) BufferOverflow.DROP_OLDEST else BufferOverflow.SUSPEND
+    )
+    .flowOn(IODispatchers.WatchIO)

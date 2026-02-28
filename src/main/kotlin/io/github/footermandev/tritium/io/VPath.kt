@@ -3,7 +3,7 @@ package io.github.footermandev.tritium.io
 import io.github.footermandev.tritium.logger
 import io.github.footermandev.tritium.matches
 import io.github.footermandev.tritium.userHome
-import kotlinx.coroutines.Dispatchers
+import io.qt.core.QUrl
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.Serializable
@@ -76,7 +76,7 @@ data class VPath(
             when (seg) {
                 "", "." -> {}
                 ".." -> {
-                    if (out.isNotEmpty() && out.last() != "...") {
+                    if (out.isNotEmpty() && out.last() != "..") {
                         out.removeAt(out.size - 1)
                     } else {
                         if (!isAbsolute) {
@@ -155,45 +155,17 @@ data class VPath(
      */
     fun toJFile(): File = File(this.toString())
 
-    private fun encodeSegment(seg: String): String {
-        if (seg.isEmpty()) return ""
-        val allowed = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz-._~!$&'()*+,;=:@"
-        val bytes = seg.toByteArray()
-        val sb = StringBuilder(bytes.size * 3)
-        for (b in bytes) {
-            val ch = (b.toInt() and 0xff).toChar()
-            if (allowed.indexOf(ch) >= 0) {
-                sb.append(ch)
-            } else {
-                sb.append('%')
-                val hi = Character.forDigit((b.toInt() shr 4) and 0xF, 16)
-                val lo = Character.forDigit((b.toInt()) and 0xF, 16)
-                sb.append(Character.toUpperCase(hi))
-                sb.append(Character.toLowerCase(lo))
-            }
-        }
-        return sb.toString()
-    }
+    /**
+     * Convert to a Qt [QUrl] file URL.
+     * Relative paths are resolved against [base].
+     */
+    fun toQUrl(base: VPath = cwd()): QUrl = QUrl.fromLocalFile(toAbsolute(base).toJFile().absolutePath)
 
     /**
-     * Build a properly encoded file [URI], per-segment percent-encoding.
-     * - For POSIX absolute root `/`, path becomes "/seg1/seg2"
-     * - For Windows drive root, path becomes "/C:/seg1/seg2" so resulting [URI] matches common Java/Windows expectations.
+     * Build a canonical local file [URI] using the JDK implementation.
+     * Relative paths are resolved to absolute first.
      */
-    fun toFileUriEncoded(): URI {
-        val encodedSegments = segments.map { encodeSegment(it) }
-        val pathStr = when {
-            root == null -> encodedSegments.joinToString("/")
-            root == "/" -> "/" + encodedSegments.joinToString("/")
-            root.matches(Regex("^[A-Za-z]:$")) -> "/$root" + (if (encodedSegments.isEmpty()) "" else "/" + encodedSegments.joinToString(
-                "/"
-            ))
-
-            else -> root + (if (encodedSegments.isEmpty()) "" else "/" + encodedSegments.joinToString("/"))
-        }
-        // Use empty authority to produce a canonical file URI (file:///...).
-        return URI("file", "", pathStr, null)
-    }
+    fun toFileUriEncoded(): URI = toAbsolute().toJFile().toURI()
 
     /**
      * Return true when filename starts with '.'.
@@ -289,7 +261,7 @@ data class VPath(
     fun touch(): VPath {
         try {
             val p = toJPath()
-            Files.createDirectories(p.parent ?: p)
+            p.parent?.let { Files.createDirectories(it) }
             if(!Files.exists(p)) Files.createFile(p)
         } catch (e: Exception) {
             logger.error("Exception touching path '$this'", e)
@@ -315,7 +287,7 @@ data class VPath(
         Files.readAllBytes(toJPath())
     } catch (e: Exception) {
         logger.warn("Exception reading bytes for path '$this'", e)
-        byteArrayOf(0)
+        byteArrayOf()
     }
 
     /**
@@ -324,7 +296,7 @@ data class VPath(
     fun writeBytes(bytes: ByteArray, vararg options: OpenOption): VPath {
         try {
             val p = toJPath()
-            Files.createDirectories(p.parent ?: p)
+            p.parent?.let { Files.createDirectories(it) }
             Files.write(p, bytes, *options.ifEmpty { arrayOf(StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING) })
         } catch (e: Exception) {
             logger.error("Exception writing bytes for path '$this'", e)
@@ -333,13 +305,29 @@ data class VPath(
         return this
     }
 
-    suspend fun readBytesAsync(): ByteArray? = withContext(Dispatchers.IO) { bytesOrNull() }
+    /**
+     * Atomically write bytes via temp file + replace.
+     */
+    fun writeBytesAtomic(bytes: ByteArray, durable: Boolean = false): VPath {
+        atomicWrite(this, bytes, durable = durable)
+        return this
+    }
 
-    suspend fun writeBytesAsync(bytes: ByteArray, vararg options: OpenOption): VPath = withContext(Dispatchers.IO) {
+    /**
+     * Atomically write text via temp file + replace.
+     */
+    fun writeTextAtomic(text: String, charset: Charset = Charsets.UTF_8, durable: Boolean = false): VPath {
+        atomicWrite(this, text.toByteArray(charset), durable = durable)
+        return this
+    }
+
+    suspend fun readBytesAsync(): ByteArray? = withContext(IODispatchers.FileIO) { bytesOrNull() }
+
+    suspend fun writeBytesAsync(bytes: ByteArray, vararg options: OpenOption): VPath = withContext(IODispatchers.FileIO) {
         writeBytes(bytes, *options)
     }
 
-    suspend fun listAsync(): List<VPath> = withContext(Dispatchers.IO) { list() }
+    suspend fun listAsync(): List<VPath> = withContext(IODispatchers.FileIO) { list() }
 
     /**
      * List child names, returns an empty list if not directory or on error.
@@ -480,9 +468,7 @@ data class VPath(
 
         segments.size > 1 -> VPath(root, segments.dropLast(1))
 
-        segments.size == 1 -> cwd()
-
-        else -> cwd()
+        else -> VPath(null, emptyList())
     }
 
     fun startsWith(prefix: VPath): Boolean {
@@ -552,7 +538,7 @@ data class VPath(
 
     fun isRoot(): Boolean = isAbsolute && segments.isEmpty()
     fun isEmpty(): Boolean = segments.isEmpty() && root == null
-    fun isNotEmpty(): Boolean = segments.isNotEmpty() && root != null
+    fun isNotEmpty(): Boolean = !isEmpty()
 
     /**
      * Return the last-modified timestamp of this path as an [Instant] or null if it doesn't exist or cannot be read.
@@ -571,7 +557,7 @@ data class VPath(
     }
 
     suspend fun lastModifiedOrNullAsync(followSymLinks: Boolean = true): Instant? =
-        withContext(Dispatchers.IO) { lastModifiedOrNull(followSymLinks) }
+        withContext(IODispatchers.FileIO) { lastModifiedOrNull(followSymLinks) }
 
     fun creationOrNull(followSymLinks: Boolean = true): Instant? = try {
         val attrs: BasicFileAttributes
@@ -587,7 +573,7 @@ data class VPath(
     }
 
     suspend fun creationOrNullAsync(followSymLinks: Boolean = true): Instant? =
-        withContext(Dispatchers.IO) { creationOrNull(followSymLinks) }
+        withContext(IODispatchers.FileIO) { creationOrNull(followSymLinks) }
 
     fun lastAccessOrNull(followSymLinks: Boolean = true): Instant? = try {
         val attrs: BasicFileAttributes
@@ -603,7 +589,7 @@ data class VPath(
     }
 
     suspend fun lastAccessOrNullAsync(followSymLinks: Boolean = true): Instant? =
-        withContext(Dispatchers.IO) { lastAccessOrNull(followSymLinks) }
+        withContext(IODispatchers.FileIO) { lastAccessOrNull(followSymLinks) }
 
     /**
      * Read the file contents as text.
@@ -641,7 +627,7 @@ data class VPath(
     }
 
     suspend fun readTextOrNullAsync(charset: Charset = Charsets.UTF_8): String? =
-        withContext(Dispatchers.IO) { readTextOrNull(charset) }
+        withContext(IODispatchers.FileIO) { readTextOrNull(charset) }
 
     fun readLinesOrNull(charset: Charset = Charsets.UTF_8): List<String>? = try {
         Files.readAllLines(toJPath(), charset)
@@ -651,7 +637,7 @@ data class VPath(
     }
 
     suspend fun readLinesOrNullAsync(charset: Charset = Charsets.UTF_8): List<String>? =
-        withContext(Dispatchers.IO) { readLinesOrNull(charset) }
+        withContext(IODispatchers.FileIO) { readLinesOrNull(charset) }
 
     fun bufferedReaderOrNull(charset: Charset = Charsets.UTF_8): BufferedReader? = try {
         Files.newBufferedReader(toJPath(), charset)
@@ -670,7 +656,7 @@ data class VPath(
     fun outputStream(vararg openOption: OpenOption = emptyArray()): OutputStream = try {
         Files.newOutputStream(toJPath(), *openOption)
     } catch (e: Exception) {
-        logger.warn("Failed to get InputStream for path '$this'", e)
+        logger.warn("Failed to get OutputStream for path '$this'", e)
         throw e
     }
 
@@ -697,10 +683,10 @@ data class VPath(
             val s = input.trim()
 
             if(s.isEmpty()) return VPath(null, emptyList())
+            if(s == ".") return VPath(null, emptyList())
 
             // Handle Windows drive prefix
-            val driveRoot = Regex("^([A-Za-z]:)([/\\\\])?(.*)$")
-            val driveMatch = driveRoot.find(s)
+            val driveMatch = WINDOWS_DRIVE_ROOT_REGEX.find(s)
             if(driveMatch != null) {
                 val drive = driveMatch.groupValues[1]
                 val rest = driveMatch.groupValues[3]
@@ -720,7 +706,7 @@ data class VPath(
 
         private fun splitSegments(raw: String): List<String> {
             if(raw.isEmpty()) return emptyList()
-            return raw.split(Regex("[/\\\\]")).filter { it.isNotEmpty() }
+            return raw.split(PATH_SEGMENT_SPLIT_REGEX).filter { it.isNotEmpty() }
         }
 
         /** String */
@@ -757,6 +743,9 @@ data class VPath(
             val cwd = System.getProperty("user.dir") ?: "."
             return parse(cwd)
         }
+
+        private val WINDOWS_DRIVE_ROOT_REGEX = Regex("^([A-Za-z]:)([/\\\\])?(.*)$")
+        private val PATH_SEGMENT_SPLIT_REGEX = Regex("[/\\\\]")
 
         private fun parseUri(uri: URI): VPath {
             fun percentDecode(raw: String?): String {
@@ -796,9 +785,14 @@ data class VPath(
                 }
 
                 "file" -> {
-                    val rawPath = uri.rawPath ?: uri.path ?: ""
-                    val decoded = percentDecode(rawPath)
-                    parse(decoded)
+                    val fromNio = runCatching { Paths.get(uri).toString() }.getOrNull()
+                    if (!fromNio.isNullOrBlank()) {
+                        parse(fromNio)
+                    } else {
+                        val rawPath = uri.rawPath ?: uri.path ?: ""
+                        val decoded = percentDecode(rawPath)
+                        parse(decoded)
+                    }
                 }
 
                 else -> {

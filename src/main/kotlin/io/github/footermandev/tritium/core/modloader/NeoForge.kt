@@ -2,6 +2,7 @@ package io.github.footermandev.tritium.core.modloader
 
 import io.github.footermandev.tritium.TConstants
 import io.github.footermandev.tritium.fromTR
+import io.github.footermandev.tritium.io.IODispatchers
 import io.github.footermandev.tritium.io.VPath
 import io.github.footermandev.tritium.io.linkOrCopyFromCache
 import io.github.footermandev.tritium.logger
@@ -26,6 +27,7 @@ import kotlinx.coroutines.sync.Semaphore
 import kotlinx.coroutines.sync.withPermit
 import kotlinx.serialization.json.*
 import org.w3c.dom.Document
+import java.io.ByteArrayInputStream
 import java.io.File
 import java.io.FileOutputStream
 import java.net.URI
@@ -34,6 +36,7 @@ import java.nio.file.StandardCopyOption
 import java.security.MessageDigest
 import java.util.jar.*
 import java.util.zip.ZipFile
+import java.util.zip.ZipInputStream
 import javax.xml.parsers.DocumentBuilderFactory
 import kotlin.io.path.absolutePathString
 
@@ -44,6 +47,11 @@ import kotlin.io.path.absolutePathString
  * - Materializes a merged version JSON for launching.
  */
 class NeoForge : ModLoader(), Registrable {
+    private companion object {
+        const val LIBS_CONCURRENCY_MIN = 8
+        const val LIBS_CONCURRENCY_MAX = 24
+    }
+
     override val id: String = "neoforge"
     override val displayName: String = "NeoForge"
     override val repository: URI = "https://maven.neoforged.net/releases/net/neoforged/neoforge".toURI()
@@ -61,6 +69,17 @@ class NeoForge : ModLoader(), Registrable {
             requestTimeoutMillis = 60_000
             connectTimeoutMillis = 15_000
             socketTimeoutMillis = 60_000
+        }
+        install(HttpRequestRetry) {
+            maxRetries = 3
+            retryOnExceptionOrServerErrors(maxRetries = 3)
+            retryIf { _, response ->
+                response.status == HttpStatusCode.TooManyRequests ||
+                    response.status == HttpStatusCode.RequestTimeout
+            }
+            delayMillis { retry ->
+                (500L * (1L shl (retry - 1))).coerceAtMost(5000L)
+            }
         }
         defaultRequest {
             header("User-Agent", ClientIdentity.userAgent)
@@ -371,15 +390,15 @@ class NeoForge : ModLoader(), Registrable {
 
             val outDir = targetDir.resolve(".tr").resolve("loader").resolve(id)
             outDir.mkdirs()
-            outDir.resolve("install_profile.json").writeBytes(installProfile.toByteArray())
-            outDir.resolve("version.json").writeBytes(versionJson.toByteArray())
+            outDir.resolve("install_profile.json").writeBytesAtomic(installProfile.toByteArray())
+            outDir.resolve("version.json").writeBytesAtomic(versionJson.toByteArray())
             val patch = buildJsonObject {
                 versionInfo["mainClass"]?.let { put("mainClass", it) }
                 val args = versionInfo["arguments"] ?: versionInfo["minecraftArguments"]
                 args?.let { put("arguments", it) }
                 put("libraries", patchLibs)
             }
-            outDir.resolve("version_patch.json").writeBytes(json.encodeToString(patch).toByteArray())
+            outDir.resolve("version_patch.json").writeBytesAtomic(json.encodeToString(patch).toByteArray())
 
             if(!runInstallProcessors(installProfile, installer, targetDir, mcVersion, version)) {
                 logger.warn("NeoForge install processors failed for {}", version)
@@ -445,6 +464,7 @@ class NeoForge : ModLoader(), Registrable {
      */
     override fun prepareLaunchJvmArgs(context: LaunchContext, classpath: List<String>, jvmArgs: MutableList<String>) {
         val libsDir = context.projectDir.resolve(".tr").resolve("libraries")
+        val fmlMajor = getFmlLoaderMajor(context.versionJson)
         val earlyDisplayPath = findLibraryByPathAny(
             context.versionJson,
             listOf(
@@ -464,7 +484,9 @@ class NeoForge : ModLoader(), Registrable {
             modulePathArg = jvmArgs[pIdx + 1]
         }
 
-        if (earlyDisplay != null) {
+        // FML in some 1.20 versions is resolved differently.
+        val shouldInjectEarlyDisplayIntoModulePath = fmlMajor == null || fmlMajor >= 4
+        if (earlyDisplay != null && shouldInjectEarlyDisplayIntoModulePath) {
             if (pIdx >= 0 && pIdx + 1 < jvmArgs.size) {
                 val current = jvmArgs[pIdx + 1]
                 if (!current.contains(earlyDisplay)) {
@@ -489,10 +511,36 @@ class NeoForge : ModLoader(), Registrable {
             }
         }
 
-        val desiredRaw = modulePathArg.ifBlank { classpath.joinToString(File.pathSeparator) }
-        val desired = dedupPaths(removeMainJarFromPaths(desiredRaw, context.mergedId))
-        setOrReplaceProp(jvmArgs, "-Dfml.pluginLayerLibraries", desired)
-        setOrReplaceProp(jvmArgs, "-Dfml.gameLayerLibraries", desired)
+        if (fmlMajor != null && fmlMajor < 4) {
+            setOrReplaceProp(jvmArgs, "-Dfml.pluginLayerLibraries", "")
+            setOrReplaceProp(jvmArgs, "-Dfml.gameLayerLibraries", "")
+            logger.info(
+                "NeoForge layer libraries prepared (fmlMajor={}, pluginCount=0, gameCount=0, mode=legacy-empty)",
+                fmlMajor
+            )
+            return
+        }
+
+        val pluginLayerRaw = modulePathArg
+        val gameLayerRaw = classpath.joinToString(File.pathSeparator)
+        val pluginNames = toFmlLayerLibraryNameSet(removeMainJarFromPaths(pluginLayerRaw, context.mergedId))
+        val gameNames = toFmlLayerLibraryNameSet(removeMainJarFromPaths(gameLayerRaw, context.mergedId))
+            .filterNot { pluginNames.contains(it) }
+            .toCollection(LinkedHashSet())
+        val pluginLayer = pluginNames.joinToString(",")
+        val gameLayer = gameNames.joinToString(",")
+        setOrReplaceProp(jvmArgs, "-Dfml.pluginLayerLibraries", pluginLayer)
+        setOrReplaceProp(jvmArgs, "-Dfml.gameLayerLibraries", gameLayer)
+        logger.info(
+            "NeoForge layer libraries prepared (fmlMajor={}, pluginCount={}, gameCount={}, earlydisplayInPlugin={}, earlydisplayInGame={})",
+            fmlMajor,
+            pluginNames.size,
+            gameNames.size,
+            pluginNames.any { it.contains("earlydisplay", ignoreCase = true) },
+            gameNames.any { it.contains("earlydisplay", ignoreCase = true) }
+        )
+        logger.debug("NeoForge layer plugin list: {}", pluginLayer)
+        logger.debug("NeoForge layer game list: {}", gameLayer)
     }
 
     /**
@@ -1276,11 +1324,21 @@ class NeoForge : ModLoader(), Registrable {
     }
 
     /**
-     * Deduplicate entries in a module path string.
+     * Convert a path-separated list into the comma-separated jar-name list FML expects.
      */
-    private fun dedupPaths(paths: String): String {
-        if (paths.isBlank()) return paths
-        return paths.split(File.pathSeparator).distinct().joinToString(File.pathSeparator)
+    private fun toFmlLayerLibraryNameSet(paths: String): LinkedHashSet<String> {
+        val names = LinkedHashSet<String>()
+        if (paths.isBlank()) return names
+
+        for (entry in paths.split(File.pathSeparator)) {
+            val trimmed = entry.trim()
+            if (trimmed.isBlank()) continue
+            val normalized = trimmed.replace('\\', '/')
+            val fileName = normalized.substringAfterLast('/')
+            if (fileName.isBlank()) continue
+            names += fileName
+        }
+        return names
     }
 
     /**
@@ -1333,6 +1391,7 @@ class NeoForge : ModLoader(), Registrable {
                 out.parent().mkdirs()
                 val bytes = downloadFromRepos(coord, path)
                 if (bytes != null) {
+                    validateJarBytesOrThrow(path, bytes)
                     out.writeBytes(bytes)
                     logger.info("Downloaded maven artifact {} -> {}", coord, out.toAbsolute())
                 }
@@ -1360,6 +1419,7 @@ class NeoForge : ModLoader(), Registrable {
             out.parent().mkdirs()
             val bytes = downloadFromRepos(coordNormalized, path)
             if (bytes != null) {
+                validateJarBytesOrThrow(path, bytes)
                 out.writeBytes(bytes)
                 logger.info("Downloaded maven artifact {} -> {}", coord, out.toAbsolute())
                 out
@@ -1414,14 +1474,19 @@ class NeoForge : ModLoader(), Registrable {
     /**
      * Ensure every library in the installer + version.json set is present under the instance `.tr/libraries`.
      */
-    private suspend fun downloadLibraries(libs: JsonArray, targetDir: VPath) {
+    private suspend fun downloadLibraries(libs: JsonArray, targetDir: VPath) = withContext(IODispatchers.BulkIO) {
         val baseDir = targetDir.resolve(".tr").resolve("libraries")
         val cacheRoot = fromTR(TConstants.Dirs.CACHE).resolve("libraries")
-        val semaphore = Semaphore(8)
         val entries = libs.mapNotNull { it as? JsonObject }
+        val total = entries.size
+        val concurrency = chooseLibraryConcurrency(total)
+        logger.info("NeoForge libraries: {} to ensure, concurrency={}", total, concurrency)
+        val semaphore = Semaphore(concurrency)
+        val startedAt = System.currentTimeMillis()
+        var completed = 0
 
         coroutineScope {
-            entries.map { obj ->
+            entries.withIndex().map { (idx, obj) ->
                 launch {
                     val name = obj["name"]?.jsonPrimitive?.contentOrNull ?: return@launch
                     val artifact = obj["downloads"]?.jsonObject
@@ -1434,28 +1499,94 @@ class NeoForge : ModLoader(), Registrable {
                     val url = explicitUrl ?: (baseUrl.trimEnd('/') + "/" + path)
                     val dest = baseDir.resolve(path)
                     val cacheFile = cacheRoot.resolve(path)
-                    if (linkOrCopyFromCache(cacheFile, dest)) return@launch
                     semaphore.withPermit {
                         try {
-                            val bytes = client.get(url).bodyAsBytes()
+                            if (linkOrCopyFromCache(cacheFile, dest) && isUsableLibraryArtifact(dest, expectedSize)) {
+                                return@withPermit
+                            }
+                            if (dest.exists() && !isUsableLibraryArtifact(dest, expectedSize)) {
+                                dest.delete()
+                            }
+                            if (cacheFile.exists() && !isUsableLibraryArtifact(cacheFile, expectedSize)) {
+                                cacheFile.delete()
+                            }
+                            val bytes = downloadBytesChecked(url)
                             if (expectedSize != null && expectedSize > 0L && bytes.size.toLong() != expectedSize) {
                                 throw IllegalStateException(
                                     "Size mismatch for $name ($path): got ${bytes.size}, expected $expectedSize"
                                 )
                             }
+                            validateJarBytesOrThrow(path, bytes)
                             cacheFile.parent().mkdirs()
-                            cacheFile.writeBytes(bytes)
+                            cacheFile.writeBytesAtomic(bytes)
                             dest.parent().mkdirs()
                             if (!linkOrCopyFromCache(cacheFile, dest)) {
-                                dest.writeBytes(bytes)
+                                dest.writeBytesAtomic(bytes)
                             }
-                            logger.info("Downloaded library {} -> {}", name, dest.toAbsolute())
+                            logger.debug("neoforge lib [{}/{}] {} -> {}", idx + 1, total, name, dest.toAbsolute())
                         } catch (t: Throwable) {
                             logger.warn("Failed to download library {} from {}", name, url, t)
+                        } finally {
+                            val done = synchronized(this@NeoForge) { ++completed }
+                            if (done % 40 == 0 || done == total) {
+                                val elapsed = System.currentTimeMillis() - startedAt
+                                logger.info("NeoForge libraries progress {}/{} ({} ms)", done, total, elapsed)
+                            }
                         }
                     }
                 }
             }.joinAll()
+        }
+
+        logger.info("NeoForge libraries complete in {} ms", System.currentTimeMillis() - startedAt)
+    }
+
+    private fun chooseLibraryConcurrency(total: Int): Int {
+        val cores = Runtime.getRuntime().availableProcessors().coerceAtLeast(2)
+        val target = when {
+            total >= 1_000 -> 24
+            total >= 500 -> 20
+            else -> 12
+        }
+        return (cores * 3).coerceIn(LIBS_CONCURRENCY_MIN, minOf(target, LIBS_CONCURRENCY_MAX))
+    }
+
+    private suspend fun downloadBytesChecked(url: String, timeoutMs: Long = 45_000L): ByteArray = withTimeout(timeoutMs) {
+        val response = client.get(url)
+        if (!response.status.isSuccess()) {
+            throw IllegalStateException("HTTP ${response.status.value} downloading '$url'")
+        }
+        response.bodyAsBytes()
+    }
+
+    private fun validateJarBytesOrThrow(path: String, bytes: ByteArray) {
+        if (!path.endsWith(".jar", ignoreCase = true)) return
+        if (!isValidJarBytes(bytes)) {
+            throw IllegalStateException("Downloaded NeoForge jar is invalid: $path")
+        }
+    }
+
+    private fun isUsableLibraryArtifact(path: VPath, expectedSize: Long?): Boolean {
+        if (!path.exists()) return false
+        val size = path.sizeOrNull() ?: return false
+        if (size <= 0L) return false
+        if (expectedSize != null && expectedSize > 0L && size != expectedSize) return false
+        if (!path.fileName().endsWith(".jar", ignoreCase = true)) return true
+        return try {
+            JarFile(path.toJFile()).use { true }
+        } catch (_: Throwable) {
+            false
+        }
+    }
+
+    private fun isValidJarBytes(bytes: ByteArray): Boolean {
+        if (bytes.size < 4) return false
+        return try {
+            ZipInputStream(ByteArrayInputStream(bytes)).use { zis ->
+                zis.nextEntry != null
+            }
+        } catch (_: Throwable) {
+            false
         }
     }
 
@@ -1501,8 +1632,8 @@ class NeoForge : ModLoader(), Registrable {
                     continue
                 }
 
-                val tmp = withContext(Dispatchers.IO) {
-                    Files.createTempFile("tritium-repo-download-", ".zip")
+                val tmp = withContext(IODispatchers.FileIO) {
+                    runInterruptible { Files.createTempFile("tritium-repo-download-", ".zip") }
                 }
                 try {
                     val channel: ByteReadChannel = resp.bodyAsChannel()
@@ -1515,16 +1646,16 @@ class NeoForge : ModLoader(), Registrable {
                         continue
                     }
 
-                    val bytes = withContext(Dispatchers.IO) {
-                        Files.readAllBytes(tmp)
+                    val bytes = withContext(IODispatchers.FileIO) {
+                        runInterruptible { Files.readAllBytes(tmp) }
                     }
-                    withContext(Dispatchers.IO) {
-                        Files.deleteIfExists(tmp)
+                    withContext(IODispatchers.FileIO) {
+                        runInterruptible { Files.deleteIfExists(tmp) }
                     }
                     return bytes
                 } finally {
-                    withContext(Dispatchers.IO) {
-                        Files.deleteIfExists(tmp)
+                    withContext(IODispatchers.FileIO) {
+                        runInterruptible { Files.deleteIfExists(tmp) }
                     }
                 }
             } catch (t: Throwable) {

@@ -2,7 +2,9 @@ package io.github.footermandev.tritium.ui.project.menu.builtin
 
 import io.github.footermandev.tritium.TConstants
 import io.github.footermandev.tritium.core.project.ProjectBase
+import io.github.footermandev.tritium.core.project.ProjectMngr
 import io.github.footermandev.tritium.fromTR
+import io.github.footermandev.tritium.io.VPath
 import io.github.footermandev.tritium.logger
 import io.github.footermandev.tritium.platform.CompanionBridge
 import io.github.footermandev.tritium.platform.CompanionBridgeResponse
@@ -10,6 +12,8 @@ import io.github.footermandev.tritium.platform.GameLauncher
 import io.github.footermandev.tritium.platform.GameProcessMngr
 import io.github.footermandev.tritium.ui.helpers.runOnGuiThread
 import io.github.footermandev.tritium.ui.notifications.NotificationMngr
+import io.github.footermandev.tritium.ui.project.ProjectTaskMngr
+import io.github.footermandev.tritium.ui.project.ProjectViewWindow
 import io.github.footermandev.tritium.ui.project.menu.MenuActionContext
 import io.github.footermandev.tritium.ui.project.menu.MenuItem
 import io.github.footermandev.tritium.ui.project.menu.MenuItemKind
@@ -17,6 +21,9 @@ import io.github.footermandev.tritium.ui.project.menu.builtin.BuiltinMenuItems.A
 import io.github.footermandev.tritium.ui.theme.TIcons
 import io.github.footermandev.tritium.ui.theme.qt.grayOverlay
 import io.github.footermandev.tritium.ui.theme.qt.icon
+import io.qt.core.Qt
+import io.qt.gui.QGuiApplication
+import io.qt.gui.QIcon
 import io.qt.widgets.QMessageBox
 import kotlinx.coroutines.*
 import java.nio.file.Files
@@ -34,6 +41,8 @@ object BuiltinMenuItems {
     private const val STOP_POLL_INTERVAL_MS = 200L
     private const val STOP_POLL_TIMEOUT_MS = 8_000L
     private const val KILL_WAIT_TIMEOUT_MS = 4_000L
+    private const val DOWNLOAD_POLL_INTERVAL_MS = 200L
+    private const val DOWNLOAD_WAIT_TIMEOUT_MS = 10 * 60_000L
 
     val Play = MenuItem(
         id = "play",
@@ -46,13 +55,27 @@ object BuiltinMenuItems {
         ),
         icon = TIcons.Run.icon,
         iconResolver = { ctx ->
-            val running = ctx.project?.let { GameLauncher.isGameRunning(it) } == true
-            if (running) TIcons.Rerun.icon else TIcons.Run.icon
+            val project = ctx.project
+            if (project == null) {
+                TIcons.Run.icon
+            } else {
+                when {
+                    GameLauncher.isGameRunning(project) -> TIcons.Rerun.icon
+                    isAssetGenerationActive(project) -> TIcons.Download.icon
+                    GameLauncher.needsRuntimeDownload(project) -> TIcons.Download.icon
+                    else -> TIcons.Run.icon
+                }
+            }
         },
-        tooltip = "Play game (reruns if already running)",
+        enabledResolver = { ctx ->
+            val project = ctx.project
+            project != null && !isAssetGenerationActive(project)
+        },
+        tooltip = "Play game (reruns if running, downloads runtime when missing)",
         action = { ctx ->
             val project = ctx.project ?: return@MenuItem
             scope.launch {
+                if (isAssetGenerationActive(project)) return@launch
                 val wasRunning = GameLauncher.isGameRunning(project)
                 if (wasRunning) {
                     val stop = stopGame(project)
@@ -61,6 +84,31 @@ object BuiltinMenuItems {
                         return@launch
                     }
                 }
+
+                val needsDownload = GameLauncher.needsRuntimeDownload(project)
+                if (!wasRunning && needsDownload) {
+                    GameLauncher.prepareRuntime(project)
+                    val finished = waitForRuntimePreparation(project, DOWNLOAD_WAIT_TIMEOUT_MS)
+                    if (!finished) {
+                        logger.warn("Timed out waiting for runtime preparation to finish for '{}'", project.name)
+                        return@launch
+                    }
+
+                    val stillNeedsDownload = GameLauncher.needsRuntimeDownload(project)
+                    if (!stillNeedsDownload) {
+                        logger.info("Runtime downloads finished for '{}'", project.name)
+                        postActionStatus(
+                            project = project,
+                            header = "Downloads Finished",
+                            message = "Runtime assets and loader files are ready.",
+                            icon = TIcons.Download.icon
+                        )
+                    } else {
+                        logger.warn("Runtime preparation finished but runtime is still incomplete for '{}'", project.name)
+                    }
+                    return@launch
+                }
+
                 GameLauncher.launch(project)
             }
         }
@@ -73,7 +121,8 @@ object BuiltinMenuItems {
         kind = MenuItemKind.ACTION,
         meta = mapOf(
             "align" to "right",
-            "iconOnly" to "true"
+            "iconOnly" to "true",
+            "shiftHoverForceIcon" to "true"
         ),
         icon = TIcons.Stop.icon,
         enabledResolver = { ctx ->
@@ -86,8 +135,9 @@ object BuiltinMenuItems {
         tooltip = "Request game shutdown",
         action = { ctx ->
             val project = ctx.project ?: return@MenuItem
+            val forceKill = QGuiApplication.queryKeyboardModifiers().testFlag(Qt.KeyboardModifier.ShiftModifier)
             scope.launch {
-                val stop = stopGame(project)
+                val stop = stopGame(project, forceKill = forceKill)
                 if (!stop.stopped) {
                     logger.warn("Stop action failed: {}", stop.message)
                 }
@@ -118,6 +168,7 @@ object BuiltinMenuItems {
                 val result = invalidateCaches()
                 runOnGuiThread {
                     showInvalidateResult(ctx, result)
+                    (ctx.window as? ProjectViewWindow)?.rebuildMenus()
                 }
             }
         }
@@ -166,7 +217,7 @@ object BuiltinMenuItems {
         )
     }
 
-    private fun postActionStatus(project: ProjectBase?, header: String, message: String, icon: io.qt.gui.QIcon) {
+    private fun postActionStatus(project: ProjectBase?, header: String, message: String, icon: QIcon) {
         runOnGuiThread {
             NotificationMngr.post(
                 id = "generic",
@@ -234,7 +285,7 @@ object BuiltinMenuItems {
         return InvalidateCachesResult(deleted = deleted, failed = failed)
     }
 
-    private fun deleteTree(path: io.github.footermandev.tritium.io.VPath): Boolean {
+    private fun deleteTree(path: VPath): Boolean {
         if (!path.exists()) return true
         return try {
             Files.walk(path.toJPath()).use { stream ->
@@ -249,7 +300,7 @@ object BuiltinMenuItems {
         }
     }
 
-    private suspend fun stopGame(project: ProjectBase): StopResult {
+    private suspend fun stopGame(project: ProjectBase, forceKill: Boolean = false): StopResult {
         if (!GameLauncher.isGameRunning(project)) {
             return StopResult(true, "Game is not running.")
         }
@@ -257,6 +308,10 @@ object BuiltinMenuItems {
         val companionAvailable = isCompanionAvailable()
         if (!companionAvailable) {
             return forceKillAndAwait(project, "Companion is unavailable; game process was force-stopped.")
+        }
+
+        if (forceKill) {
+            return forceKillAndAwait(project, "Game process was force-stopped.")
         }
 
         val closeResponse = try {
@@ -299,6 +354,15 @@ object BuiltinMenuItems {
         return ping.ok
     }
 
+    private suspend fun waitForRuntimePreparation(project: ProjectBase, timeoutMs: Long): Boolean {
+        val end = System.currentTimeMillis() + timeoutMs.coerceAtLeast(0L)
+        while (System.currentTimeMillis() < end) {
+            if (!GameLauncher.isRuntimePreparationActive(project)) return true
+            delay(DOWNLOAD_POLL_INTERVAL_MS)
+        }
+        return !GameLauncher.isRuntimePreparationActive(project)
+    }
+
     private suspend fun forceKillAndAwait(project: ProjectBase, baseMessage: String): StopResult {
         val killed = GameLauncher.killGameProcess(project, force = true)
         if (!killed) {
@@ -308,7 +372,15 @@ object BuiltinMenuItems {
         if (!stoppedAfterKill) {
             return StopResult(false, "Stop requested, but the game process is still running.")
         }
-        return StopResult(true, if (baseMessage.isBlank()) "Game process was force-stopped." else baseMessage)
+        return StopResult(true, baseMessage.ifBlank { "Game process was force-stopped." })
+    }
+
+    private fun isAssetGenerationActive(project: ProjectBase): Boolean {
+        if (ProjectMngr.generationActive) return true
+        if (GameLauncher.isRuntimePreparationActive(project)) return true
+        return ProjectTaskMngr.activeForProject(project).any { task ->
+            task.title.startsWith("Bootstrapping ", ignoreCase = true)
+        }
     }
 
     private data class StopResult(

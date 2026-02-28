@@ -96,7 +96,7 @@ object ProjectScopedSettingsMngr {
         val body = if (merged.root().isEmpty()) "" else merged.root().render(renderOpts) + "\n"
         try {
             file.parent().mkdirs()
-            file.writeBytes(body.toByteArray())
+            file.writeBytesAtomic(body.toByteArray())
         } catch (t: Throwable) {
             logger.warn("Failed writing project prefs key '{}' to {}", key, file, t)
         }
@@ -111,7 +111,7 @@ object ProjectScopedSettingsMngr {
         val rendered = renderSettingsFile(project, settings)
         try {
             file.parent().mkdirs()
-            file.writeBytes(rendered.toByteArray())
+            file.writeBytesAtomic(rendered.toByteArray())
         } catch (t: Throwable) {
             logger.warn("Failed creating project settings file at {}", file, t)
         }
@@ -136,7 +136,7 @@ object ProjectScopedSettingsMngr {
         if (file.exists()) return
         try {
             file.parent().mkdirs()
-            file.writeBytes(ByteArray(0))
+            file.writeBytesAtomic(ByteArray(0))
         } catch (t: Throwable) {
             logger.warn("Failed creating project prefs file at {}", file, t)
         }

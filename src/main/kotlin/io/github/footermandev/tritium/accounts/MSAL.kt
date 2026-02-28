@@ -4,10 +4,9 @@ import com.microsoft.aad.msal4j.*
 import io.github.footermandev.tritium.TConstants
 import io.github.footermandev.tritium.fromTR
 import io.github.footermandev.tritium.io.VPath
+import io.github.footermandev.tritium.io.atomicWrite
 import io.github.footermandev.tritium.logger
 import io.github.footermandev.tritium.platform.Platform
-import java.nio.file.Files
-import java.nio.file.StandardCopyOption
 import java.security.SecureRandom
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.locks.ReentrantLock
@@ -272,19 +271,8 @@ internal object MSAL {
             ctx.tokenCache().deserialize(String(data, Charsets.UTF_8))
         }
 
-        private fun atomicWrite(bytes: ByteArray) {
-            val tmp = VPath.get(cacheFile.parent(), "${cacheFile.fileName()}.tmp")
-            tmp.writeBytes(bytes)
-            try {
-                Files.move(
-                    tmp.toJPath(),
-                    cacheFile.toJPath(),
-                    StandardCopyOption.REPLACE_EXISTING,
-                    StandardCopyOption.ATOMIC_MOVE
-                )
-            } catch (_: Throwable) {
-                tmp.toJFile().renameTo(cacheFile.toJFile())
-            }
+        private fun writeCacheAtomically(bytes: ByteArray) {
+            atomicWrite(cacheFile, bytes, durable = true)
         }
 
         override fun beforeCacheAccess(ctx: ITokenCacheAccessContext) {
@@ -352,10 +340,10 @@ internal object MSAL {
                 val data = ctx.tokenCache().serialize() ?: return
                 val key = getOrCreateKey()
                 if(key == null) {
-                    atomicWrite(wrapPlain(data.toByteArray(Charsets.UTF_8)))
+                    writeCacheAtomically(wrapPlain(data.toByteArray(Charsets.UTF_8)))
                 } else {
                     val enc = encrypt(data.toByteArray(Charsets.UTF_8), key)
-                    atomicWrite(wrapEncrypted(enc))
+                    writeCacheAtomically(wrapEncrypted(enc))
                 }
             } catch (t: Throwable) {
                 logger.warn("'afterCacheAccess' failed", t)

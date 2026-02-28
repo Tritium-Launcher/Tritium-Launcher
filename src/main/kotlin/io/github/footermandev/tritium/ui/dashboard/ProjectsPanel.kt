@@ -73,7 +73,7 @@ class ProjectsPanelPrefs(private val file: VPath) {
         try {
             val payload = Payload(styleId, sortByStyle.toMap())
             file.parent().mkdirs()
-            file.writeBytes(json.encodeToString(payload).toByteArray())
+            file.writeBytesAtomic(json.encodeToString(payload).toByteArray())
         } catch (_: Throwable) {}
     }
 }

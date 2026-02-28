@@ -443,7 +443,7 @@ object NotificationMngr {
                 GlobalNotificationPreferences.serializer(),
                 GlobalNotificationPreferences(disabledIds = globalDisabledIds.toSet())
             )
-            globalPrefsPath.writeBytes(encoded.toByteArray())
+            globalPrefsPath.writeBytesAtomic(encoded.toByteArray())
         } catch (t: Throwable) {
             logger.warn("Failed to persist notification preferences to {}", globalPrefsPath, t)
         }

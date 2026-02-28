@@ -97,7 +97,7 @@
     "dashboard/folder_import": "icons/dashboard/folder_import.svg",
     "dashboard/git": "icons/dashboard/git.svg",
     "dashboard/search": "icons/dashboard/search.svg",
-    "dashboard/list_view": "icons/dashboard/list_view",
+    "dashboard/list_view": "icons/dashboard/list_view.svg",
     "dashboard/grid_view": "icons/dashboard/grid_view.svg",
     "dashboard/compact_view": "icons/dashboard/compact_view.svg",
     "dashboard/microsoft": "icons/dashboard/microsoft.svg",
@@ -106,6 +106,8 @@
     "menu/build": "icons/menu/build.svg",
     "menu/run": "icons/menu/run.svg",
     "menu/rerun": "icons/menu/rerun.svg",
-    "menu/stop": "icons/menu/stop.svg"
+    "menu/stop": "icons/menu/stop.svg",
+    "menu/force_stop": "icons/menu/force_stop.svg",
+    "menu/download": "icons/menu/download.svg"
   }
 }

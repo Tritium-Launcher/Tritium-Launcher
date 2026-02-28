@@ -5,7 +5,7 @@ import io.github.footermandev.tritium.io.VPath
 object TConstants {
     const val TR = "Tritium"
     const val TR_SERVICE = "TritiumLauncher"
-    const val VERSION = "0.0.0"
+    val VERSION: String by lazy { resolveVersion() }
     val TR_DIR: VPath = fromTR()
 
     object Dirs {
@@ -28,5 +28,20 @@ object TConstants {
             "jxl", "ico", "cur", "dds", "exr", "svg", "svgz", "eps", "pdf", "ai", "cdr", "raw", "dng", "nef", "cr2",
             "cr3", "arw", "orf", "rw2", "pef", "aseprite"
         )
+    }
+
+    private fun resolveVersion(): String {
+        val fromManifest = TConstants::class.java.`package`?.implementationVersion?.trim()
+        if (!fromManifest.isNullOrBlank()) return fromManifest
+
+        val fromResource = runCatching {
+            TConstants::class.java.classLoader
+                ?.getResourceAsStream("version.txt")
+                ?.bufferedReader(Charsets.UTF_8)
+                ?.use { it.readText().trim() }
+        }.getOrNull()
+        if (!fromResource.isNullOrBlank() && !fromResource.contains("\${")) return fromResource
+
+        return "0.0.0"
     }
 }

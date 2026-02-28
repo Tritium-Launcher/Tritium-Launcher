@@ -285,7 +285,7 @@ object ProjectMngr {
                 }
             )
             catalogFile.parent().mkdirs()
-            catalogFile.writeBytes(json.encodeToString(payload).toByteArray())
+            catalogFile.writeBytesAtomic(json.encodeToString(payload).toByteArray())
             return true
         } catch (e: Exception) {
             logger.error("Failed writing project catalog to {}", catalogFile, e)

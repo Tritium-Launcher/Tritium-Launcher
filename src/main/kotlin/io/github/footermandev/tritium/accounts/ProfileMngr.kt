@@ -183,7 +183,11 @@ object ProfileMngr {
                 val f = profilesDir.resolve("$homeAccountId.json")
                 try {
                     f.parent().mkdirs()
-                    atomicWrite(f, json.encodeToString(MCProfile.serializer(), profile).toByteArray(Charsets.UTF_8))
+                    atomicWrite(
+                        f,
+                        json.encodeToString(MCProfile.serializer(), profile).toByteArray(Charsets.UTF_8),
+                        durable = true
+                    )
                 } catch (t: Throwable) {
                     logger.warn("Failed to persist profile for $homeAccountId", t)
                 }

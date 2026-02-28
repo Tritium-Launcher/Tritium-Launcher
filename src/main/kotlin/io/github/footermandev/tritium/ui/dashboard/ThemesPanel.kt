@@ -15,7 +15,6 @@ import io.github.footermandev.tritium.ui.widgets.constructor_functions.label
 import io.github.footermandev.tritium.ui.widgets.constructor_functions.vBoxLayout
 import io.qt.core.QModelIndex
 import io.qt.core.QSignalBlocker
-import io.qt.core.QUrl
 import io.qt.core.Qt
 import io.qt.gui.*
 import io.qt.widgets.*
@@ -325,7 +324,7 @@ class ThemesPanel internal constructor(): QWidget() {
                 val dir = ThemeMngr.userThemesDir.toAbsolute()
                 if (!dir.exists()) dir.mkdirs()
                 val localPath = dir.toString()
-                val opened = QDesktopServices.openUrl(QUrl.fromLocalFile(localPath))
+                val opened = QDesktopServices.openUrl(dir.toQUrl())
                 if (!opened) {
                     val fallbackOpened = Platform.openBrowser(dir.toJFile().toURI().toString())
                     if (!fallbackOpened) {
