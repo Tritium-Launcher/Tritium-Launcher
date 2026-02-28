@@ -554,7 +554,7 @@ jobs:
     permissions:
       contents: write
     needs: build
-    if: startsWith(github.ref, 'refs/tags/v') || github.event_name == 'workflow_dispatch'
+    if: github.event_name != 'pull_request'
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -574,71 +574,22 @@ jobs:
       - name: Resolve Release Tag
         id: tag
         shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          next_series_build() {
-            local major_series="$1"
-            local minor_series="$2"
-            local page=1
-            local max_seen=0
-
-            while :; do
-              local payload
-              if ! payload="$(curl -fsSL \
-                -H "Authorization: Bearer $GH_TOKEN" \
-                -H "Accept: application/vnd.github+json" \
-                "https://api.github.com/repos/${GITHUB_REPOSITORY}/releases?per_page=100&page=${page}")"; then
-                break
-              fi
-
-              local page_count
-              page_count="$(echo "$payload" | sed -nE 's/^[[:space:]]*"tag_name":[[:space:]]*"([^"]+)".*/\1/p' | wc -l | tr -d '[:space:]')"
-
-              while IFS= read -r tag; do
-                if [[ "$tag" =~ ^v${major_series}\.${minor_series}\.([0-9]+)($|[^0-9].*) ]]; then
-                  local build_patch="${BASH_REMATCH[1]}"
-                  local build_patch_num="$((10#$build_patch))"
-                  if [[ "$build_patch_num" -gt "$max_seen" ]]; then
-                    max_seen="$build_patch_num"
-                  fi
-                fi
-              done < <(echo "$payload" | sed -nE 's/^[[:space:]]*"tag_name":[[:space:]]*"([^"]+)".*/\1/p')
-
-              if [[ ! "$page_count" =~ ^[0-9]+$ || "$page_count" -lt 100 ]]; then
-                break
-              fi
-              page=$((page + 1))
-            done
-
-            echo "$((max_seen + 1))"
-          }
-
-          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
-            echo "name=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
-          elif [[ -n "${{ github.event.inputs.tag }}" ]]; then
-            input_tag="${{ github.event.inputs.tag }}"
-            if [[ "$input_tag" == v* ]]; then
-              echo "name=$input_tag" >> "$GITHUB_OUTPUT"
-            else
-              echo "name=v$input_tag" >> "$GITHUB_OUTPUT"
-            fi
-          else
-            raw="$(sed -nE 's/^version[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' build.gradle.kts | head -n1 || true)"
-            cleaned="$(echo "$raw" | sed -E 's/[^0-9A-Za-z._-]+/-/g; s/^-+//; s/-+$//')"
-            if [[ -z "$cleaned" ]]; then
-              cleaned="0.0.0"
-            fi
-            numeric="$(echo "$cleaned" | sed -E 's/[^0-9.]+/./g; s/\.+/./g; s/^\.//; s/\.$//')"
-            IFS='.' read -r -a parts <<< "$numeric"
-            major="${parts[0]:-0}"
-            minor="${parts[1]:-0}"
-            major_num="$((10#$major))"
-            minor_num="$((10#$minor))"
-            build_num="$(next_series_build "$major_num" "$minor_num")"
-            echo "name=v${major_num}.${minor_num}.${build_num}" >> "$GITHUB_OUTPUT"
+          raw="$(sed -nE 's/^version[[:space:]]*=[[:space:]]*"([^"]+)".*/\1/p' build.gradle.kts | head -n1 || true)"
+          numeric="$(echo "$raw" | sed -E 's/[^0-9.]+/./g; s/\.+/./g; s/^\.//; s/\.$//')"
+          if [[ -z "$numeric" ]]; then
+            echo "Unable to resolve numeric version from build.gradle.kts version='$raw'" >&2
+            exit 1
           fi
+          IFS='.' read -r -a parts <<< "$numeric"
+          major="${parts[0]:-0}"
+          minor="${parts[1]:-0}"
+          patch="${parts[2]:-0}"
+          major_num="$((10#$major))"
+          minor_num="$((10#$minor))"
+          patch_num="$((10#$patch))"
+          echo "name=v${major_num}.${minor_num}.${patch_num}" >> "$GITHUB_OUTPUT"
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
