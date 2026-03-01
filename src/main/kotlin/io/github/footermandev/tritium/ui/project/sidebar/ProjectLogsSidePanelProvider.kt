@@ -12,6 +12,7 @@ import io.github.footermandev.tritium.ui.theme.TIcons
 import io.github.footermandev.tritium.ui.theme.qt.icon
 import io.github.footermandev.tritium.ui.theme.qt.qtStyle
 import io.github.footermandev.tritium.ui.theme.qt.setThemedStyle
+import io.github.footermandev.tritium.ui.widgets.TComboBox
 import io.github.footermandev.tritium.ui.widgets.constructor_functions.hBoxLayout
 import io.github.footermandev.tritium.ui.widgets.constructor_functions.label
 import io.github.footermandev.tritium.ui.widgets.constructor_functions.qWidget
@@ -37,7 +38,11 @@ class ProjectLogsSidePanelProvider : SidePanelProvider {
 
     override val preferredArea: Qt.DockWidgetArea = Qt.DockWidgetArea.BottomDockWidgetArea
 
-    private companion object {
+    companion object {
+        private const val DOCK_OBJECT_NAME = "mc_logs"
+        private const val LATEST_COMBO_OBJECT_NAME = "mcLogsLatestCombo"
+        private const val DEBUG_COMBO_OBJECT_NAME = "mcLogsDebugCombo"
+        private const val LOG_VIEW_OBJECT_NAME = "mcLogsView"
         private const val STATUS_DOT_SIZE = 10
         private const val MAX_LOG_BLOCKS = 8_000
         private const val TAIL_MAX_BYTES = 256 * 1024
@@ -50,17 +55,67 @@ class ProjectLogsSidePanelProvider : SidePanelProvider {
         private val debugArchivedNameRx = Regex("^debug-\\d+\\.log\\.gz$")
         private val latestSortNameRx = Regex("^(\\d{4}-\\d{2}-\\d{2})-(\\d+)\\.log\\.gz$")
         private val debugSortNameRx = Regex("^debug-(\\d+)\\.log\\.gz$")
+
+        fun hasDebugLog(project: ProjectBase): Boolean {
+            return project.projectDir.resolve("logs").resolve("debug.log").exists()
+        }
+
+        fun focusLatestLog(window: QMainWindow): Boolean = focusNamedLog(window, "latest.log")
+
+        fun focusDebugLog(window: QMainWindow): Boolean = focusNamedLog(window, "debug.log")
+
+        private fun focusNamedLog(window: QMainWindow, fileName: String): Boolean {
+            val dock = window.findChildren(QDockWidget::class.java).firstOrNull { it.objectName == DOCK_OBJECT_NAME }
+                ?: window.findChildren(QDockWidget::class.java).firstOrNull { it.windowTitle.equals("MC Logs", ignoreCase = true) }
+                ?: return false
+            dock.show()
+            dock.raise()
+            window.activateWindow()
+
+            val root = dock.widget() ?: return false
+            val targetComboName = if (fileName.equals("debug.log", ignoreCase = true)) {
+                DEBUG_COMBO_OBJECT_NAME
+            } else {
+                LATEST_COMBO_OBJECT_NAME
+            }
+            val combo = root.findChild(QComboBox::class.java, targetComboName) ?: return false
+            val selected = selectComboByFileName(combo, fileName)
+            if (selected) {
+                root.findChild(QPlainTextEdit::class.java, LOG_VIEW_OBJECT_NAME)?.setFocus()
+            }
+            return selected
+        }
+
+        private fun selectComboByFileName(combo: QComboBox, fileName: String): Boolean {
+            val target = fileName.lowercase()
+            for (i in 0 until combo.count) {
+                val raw = combo.itemData(i, Qt.ItemDataRole.UserRole) as? String ?: continue
+                val normalized = raw.replace('\\', '/').lowercase()
+                if (normalized.endsWith("/$target")) {
+                    combo.currentIndex = i
+                    return true
+                }
+            }
+            for (i in 0 until combo.count) {
+                if (combo.itemText(i).equals(fileName, ignoreCase = true)) {
+                    combo.currentIndex = i
+                    return true
+                }
+            }
+            return false
+        }
     }
 
     override fun create(project: ProjectBase): DockWidget {
         val dock = DockWidget(displayName, null)
+        dock.objectName = DOCK_OBJECT_NAME
         val root = qWidget()
         val headerLabel = label()
         val gameRunningDot = label()
         val latestLabel = label("Latest:")
         val debugLabel = label("Debug:")
-        val latestCombo = QComboBox()
-        val debugCombo = QComboBox()
+        val latestCombo = TComboBox()
+        val debugCombo = TComboBox()
         val logView = QPlainTextEdit().apply {
             isReadOnly = true
             lineWrapMode = QPlainTextEdit.LineWrapMode.WidgetWidth
@@ -80,10 +135,13 @@ class ProjectLogsSidePanelProvider : SidePanelProvider {
         headerLabel.wordWrap = true
         headerLabel.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         configureStatusDot(gameRunningDot)
-        latestCombo.minimumWidth = 160
-        debugCombo.minimumWidth = 160
-        latestCombo.maximumWidth = 260
-        debugCombo.maximumWidth = 260
+        latestCombo.sizeAdjustPolicy = QComboBox.SizeAdjustPolicy.AdjustToContents
+        debugCombo.sizeAdjustPolicy = QComboBox.SizeAdjustPolicy.AdjustToContents
+        latestCombo.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        debugCombo.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        latestCombo.objectName = LATEST_COMBO_OBJECT_NAME
+        debugCombo.objectName = DEBUG_COMBO_OBJECT_NAME
+        logView.objectName = LOG_VIEW_OBJECT_NAME
         logView.document()?.let { LogHighlighter(it) }
 
         fun updateHeader() {
@@ -239,6 +297,8 @@ class ProjectLogsSidePanelProvider : SidePanelProvider {
 
                 selectComboByUserData(latestCombo, prevLatest ?: activeRaw)
                 selectComboByUserData(debugCombo, prevDebug ?: activeRaw)
+                latestCombo.adjustSize()
+                debugCombo.adjustSize()
             } finally {
                 latestCombo.blockSignals(false)
                 debugCombo.blockSignals(false)

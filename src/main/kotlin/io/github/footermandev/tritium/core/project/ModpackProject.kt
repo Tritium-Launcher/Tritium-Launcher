@@ -4,7 +4,6 @@ import io.github.footermandev.tritium.*
 import io.github.footermandev.tritium.accounts.MCVersion
 import io.github.footermandev.tritium.accounts.MCVersionType
 import io.github.footermandev.tritium.accounts.MicrosoftAuth
-import io.github.footermandev.tritium.core.project.settings.ProjectSettingDefinition
 import io.github.footermandev.tritium.core.project.templates.ProjectTemplateExecutor
 import io.github.footermandev.tritium.core.project.templates.TemplateExecutionResult
 import io.github.footermandev.tritium.core.project.templates.generation.GeneratorStepDescriptor
@@ -18,6 +17,7 @@ import io.github.footermandev.tritium.platform.Platform
 import io.github.footermandev.tritium.ui.helpers.runOnGuiThread
 import io.github.footermandev.tritium.ui.notifications.NotificationMngr
 import io.github.footermandev.tritium.ui.project.ProjectTaskMngr
+import io.github.footermandev.tritium.ui.project.menu.builtin.BuiltinMenuItems
 import io.github.footermandev.tritium.ui.theme.TIcons
 import io.github.footermandev.tritium.ui.theme.qt.setStyle
 import io.github.footermandev.tritium.ui.theme.setInvalid
@@ -41,20 +41,14 @@ class ModpackProjectType : ProjectType {
     override val description: String = "Create a ModPack project"
     override val icon: QIcon = QIcon(TIcons.TrMeta)
     override val order: Int = 1
-    override val projectSettings: List<ProjectSettingDefinition> = listOf(
-        ProjectSettingDefinition(
-            key = "mc_java_path",
-            comments = listOf("Optional Java executable path used only for this project.")
-        ),
-        ProjectSettingDefinition(
-            key = "mc_args",
-            comments = listOf("Extra JVM args applied when launching Minecraft.")
-        ),
-        ProjectSettingDefinition(
-            key = "mc_memory",
-            defaultValue = "6144",
-            comments = listOf("Default memory allocation (MB) for Minecraft.")
-        ),
+    override val menuScope: ProjectMenuScope = ProjectMenuScope.only(
+        BuiltinMenuItems.Play,
+        BuiltinMenuItems.Stop,
+        BuiltinMenuItems.File,
+        BuiltinMenuItems.Edit,
+        BuiltinMenuItems.View,
+        BuiltinMenuItems.Game,
+        BuiltinMenuItems.Help
     )
 
     private val scope      = CoroutineScope(SupervisorJob() + Dispatchers.IO)

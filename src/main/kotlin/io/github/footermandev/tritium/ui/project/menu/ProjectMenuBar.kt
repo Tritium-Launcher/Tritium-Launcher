@@ -2,6 +2,7 @@ package io.github.footermandev.tritium.ui.project.menu
 
 import io.github.footermandev.tritium.connect
 import io.github.footermandev.tritium.core.project.ProjectBase
+import io.github.footermandev.tritium.core.project.ProjectType
 import io.github.footermandev.tritium.extension.core.BuiltinRegistries
 import io.github.footermandev.tritium.logger
 import io.github.footermandev.tritium.m
@@ -24,6 +25,7 @@ import io.qt.widgets.*
  * - Arbitrary embedded widgets via [MenuItem.widgetFactory]
  *
  * Extensions contribute items via the `ui.menu` registry.
+ * Visible items are filtered by the active project's [io.github.footermandev.tritium.core.project.ProjectType.menuScope].
  * Mnemonics are supported via '&' in titles (Qt standard).
  */
 class ProjectMenuBar : QWidget() {
@@ -83,7 +85,10 @@ class ProjectMenuBar : QWidget() {
     fun rebuildFor(window: QMainWindow, project: ProjectBase?, selection: Any?) {
         clearLayout()
 
-        val items = BuiltinRegistries.MenuItem.all().sortedWith(compareBy({ it.parentId ?: "" }, { it.order }, { it.title }))
+        val allItems = BuiltinRegistries.MenuItem.all().toList()
+        val projectType = resolveProjectType(project)
+        val items = filterItemsForProjectType(allItems, projectType)
+            .sortedWith(compareBy({ it.parentId ?: "" }, { it.order }, { it.title }))
 
         val children = HashMap<String, MutableList<MenuItem>>()
         val roots = mutableListOf<MenuItem>()
@@ -93,46 +98,15 @@ class ProjectMenuBar : QWidget() {
             if (pid == null) roots.add(it) else children.computeIfAbsent(pid) { mutableListOf() }.add(it)
         }
 
-        fun buildMenu(parent: QMenu, parentId: String) {
-            val kids = children[parentId] ?: return
-            val sorted = kids.sortedWith(compareBy({ it.order }, { it.title }))
-            for (k in sorted) {
-                if (!k.visible) continue
-                if (k.kind == MenuItemKind.SEPARATOR) {
-                    parent.addSeparator()
-                    continue
-                }
-                val subK = children[k.id]
-                val hasChildren = !subK.isNullOrEmpty()
-                val ctx = MenuActionContext(project, window, selection, k.meta)
-                val action = QAction(k.title, window)
-                k.resolveIcon(ctx)?.let { action.icon = it }
-                action.isEnabled = k.isEnabled(ctx)
-                k.shortcut?.let { sc -> action.setShortcut(sc) }
-                k.tooltip?.let { action.toolTip = it }
-                action.triggered.connect {
-                    try {
-                        val actionCtx = MenuActionContext(project, window, selection, k.meta)
-                        k.action?.invoke(actionCtx)
-                    } catch (t: Throwable) {
-                        logger.warn("Menu action '{}' failed", k.id, t)
-                    }
-                }
-
-                if (hasChildren && k.kind != MenuItemKind.ACTION) {
-                    val submenu = QMenu(k.title, window)
-                    submenu.addAction(action)
-                    buildMenu(submenu, k.id)
-                    parent.addMenu(submenu)
-                } else {
-                    parent.addAction(action)
-                }
-            }
-        }
-
         val topSorted = roots.sortedWith(compareBy({ it.order }, { it.title }))
-        val leftItems = topSorted.filterNot { isRightAligned(it) }
-        val rightItems = topSorted.filter { isRightAligned(it) }
+        val leftItems = topSorted.filter {
+            val ctx = MenuActionContext(project, window, selection, it.meta)
+            !isRightAligned(it) && it.isVisible(ctx)
+        }
+        val rightItems = topSorted.filter {
+            val ctx = MenuActionContext(project, window, selection, it.meta)
+            isRightAligned(it) && it.isVisible(ctx)
+        }
 
         leftItems.forEach { top ->
             addTopItem(window, top, children, project, selection)
@@ -144,6 +118,67 @@ class ProjectMenuBar : QWidget() {
         update()
     }
 
+    private fun resolveProjectType(project: ProjectBase?): ProjectType? {
+        val typeId = project?.typeId?.trim().orEmpty()
+        if (typeId.isEmpty()) return null
+
+        val projectTypes = BuiltinRegistries.ProjectType
+        projectTypes.get(typeId)?.let { return it }
+        val localId = typeId.substringAfterLast(':', missingDelimiterValue = typeId)
+        if (localId != typeId) {
+            projectTypes.get(localId)?.let { return it }
+        }
+        return null
+    }
+
+    private fun filterItemsForProjectType(items: List<MenuItem>, projectType: ProjectType?): List<MenuItem> {
+        val scope = projectType?.menuScope ?: return items
+        val includeIds = scope.includedIds()
+        val excludeIds = scope.excludedIds()
+        if (!scope.strict && includeIds.isEmpty() && excludeIds.isEmpty()) {
+            return items
+        }
+        if (scope.strict && includeIds.isEmpty()) {
+            return emptyList()
+        }
+
+        val parentById = items.associate { it.id to it.parentId }
+
+        fun chainContains(startId: String, ids: Set<String>): Boolean {
+            var current: String? = startId
+            while (current != null) {
+                if (current in ids) return true
+                current = parentById[current]
+            }
+            return false
+        }
+
+        val seedIds = linkedSetOf<String>()
+        items.forEach { item ->
+            val includedByChain = chainContains(item.id, includeIds)
+            val excludedByChain = chainContains(item.id, excludeIds)
+            val keep = if (scope.strict) {
+                includedByChain
+            } else {
+                !excludedByChain || includedByChain
+            }
+            if (keep) {
+                seedIds += item.id
+            }
+        }
+        if (seedIds.isEmpty()) return emptyList()
+
+        val keepWithAncestors = linkedSetOf<String>()
+        seedIds.forEach { id ->
+            var current: String? = id
+            while (current != null) {
+                keepWithAncestors += current
+                current = parentById[current]
+            }
+        }
+        return items.filter { it.id in keepWithAncestors }
+    }
+
     private fun addTopItem(
         window: QMainWindow,
         top: MenuItem,
@@ -151,10 +186,10 @@ class ProjectMenuBar : QWidget() {
         project: ProjectBase?,
         selection: Any?
     ) {
-        if (!top.visible) return
+        val ctx = MenuActionContext(project, window, selection, top.meta)
+        if (!top.isVisible(ctx)) return
         when (top.kind) {
             MenuItemKind.WIDGET -> {
-                val ctx = MenuActionContext(project, window, selection, top.meta)
                 val widget = top.widgetFactory?.invoke(ctx)
                 if (widget != null) {
                     layout.addWidget(widget)
@@ -189,12 +224,15 @@ class ProjectMenuBar : QWidget() {
         val baseCtx = MenuActionContext(project, window, selection, item.meta)
         val iconOnly = item.meta["iconOnly"]?.equals("true", ignoreCase = true) == true
         val useShiftHoverForceIcon = item.meta["shiftHoverForceIcon"]?.equals("true", ignoreCase = true) == true
-        val btn = QPushButton(if (iconOnly) "" else item.title)
+        val btn = QPushButton(if (iconOnly) "" else item.resolveTitle(baseCtx))
         btn.isFlat = true
-        btn.setMouseTracking(true)
+        btn.mouseTracking = true
         fun refreshVisualState() {
             val ctx = MenuActionContext(project, window, selection, item.meta)
             btn.isEnabled = item.isEnabled(ctx)
+            if (!iconOnly) {
+                btn.text = item.resolveTitle(ctx)
+            }
 
             val showForceIcon = useShiftHoverForceIcon &&
                 btn.isEnabled &&
@@ -240,25 +278,26 @@ class ProjectMenuBar : QWidget() {
     ): QToolButton {
         val baseCtx = MenuActionContext(project, window, selection, item.meta)
         val btn = QToolButton()
-        btn.text = item.title
+        btn.text = item.resolveTitle(baseCtx)
         btn.isEnabled = item.isEnabled(baseCtx)
         btn.toolTip = item.tooltip.orEmpty()
         item.resolveIcon(baseCtx)?.let { btn.icon = it }
         btn.popupMode = QToolButton.ToolButtonPopupMode.InstantPopup
 
         val menu = QMenu(window)
-        val kids = children[item.id]
-        if (!kids.isNullOrEmpty()) {
-            for (child in kids.sortedWith(compareBy({ it.order }, { it.title }))) {
-                if (!child.visible) continue
+        val kids = childItems(item, children, window, project, selection)
+        if (kids.isNotEmpty()) {
+            for (child in kids) {
+                val childCtx = MenuActionContext(project, window, selection, child.meta)
+                if (!child.isVisible(childCtx)) continue
                 if (child.kind == MenuItemKind.SEPARATOR) {
                     menu.addSeparator()
                     continue
                 }
-                val submenuKids = children[child.id]
-                if (!submenuKids.isNullOrEmpty() && child.kind != MenuItemKind.ACTION) {
-                    val submenu = QMenu(child.title, window)
-                    submenuKids.sortedWith(compareBy({ it.order }, { it.title })).forEach { grand ->
+                val submenuKids = childItems(child, children, window, project, selection)
+                if (submenuKids.isNotEmpty() && child.kind != MenuItemKind.ACTION) {
+                    val submenu = QMenu(child.resolveTitle(childCtx), window)
+                    submenuKids.forEach { grand ->
                         addActionToMenu(submenu, grand, window, project, selection, children)
                     }
                     menu.addMenu(submenu)
@@ -270,7 +309,7 @@ class ProjectMenuBar : QWidget() {
 
         // Allow top-level action for menu button
         if (item.action != null) {
-            val act = QAction(item.title, window)
+            val act = QAction(item.resolveTitle(baseCtx), window)
             item.resolveIcon(baseCtx)?.let { act.icon = it }
             act.isEnabled = item.isEnabled(baseCtx)
             item.shortcut?.let { act.setShortcut(it) }
@@ -297,24 +336,24 @@ class ProjectMenuBar : QWidget() {
         selection: Any?,
         children: Map<String, List<MenuItem>>
     ) {
-        if (!item.visible) return
+        val ctx = MenuActionContext(project, window, selection, item.meta)
+        if (!item.isVisible(ctx)) return
         if (item.kind == MenuItemKind.SEPARATOR) {
             menu.addSeparator()
             return
         }
 
-        val subKids = children[item.id]
-        if (!subKids.isNullOrEmpty() && item.kind != MenuItemKind.ACTION) {
-            val submenu = QMenu(item.title, window)
-            subKids.sortedWith(compareBy({ it.order }, { it.title })).forEach { sub ->
+        val subKids = childItems(item, children, window, project, selection)
+        if (subKids.isNotEmpty() && item.kind != MenuItemKind.ACTION) {
+            val submenu = QMenu(item.resolveTitle(ctx), window)
+            subKids.forEach { sub ->
                 addActionToMenu(submenu, sub, window, project, selection, children)
             }
             menu.addMenu(submenu)
             return
         }
 
-        val ctx = MenuActionContext(project, window, selection, item.meta)
-        val act = QAction(item.title, window)
+        val act = QAction(item.resolveTitle(ctx), window)
         item.resolveIcon(ctx)?.let { act.icon = it }
         act.isEnabled = item.isEnabled(ctx)
         item.shortcut?.let { act.setShortcut(it) }
@@ -328,6 +367,22 @@ class ProjectMenuBar : QWidget() {
             }
         }
         menu.addAction(act)
+    }
+
+    private fun childItems(
+        parent: MenuItem,
+        children: Map<String, List<MenuItem>>,
+        window: QMainWindow,
+        project: ProjectBase?,
+        selection: Any?
+    ): List<MenuItem> {
+        val staticChildren = children[parent.id].orEmpty()
+        val ctx = MenuActionContext(project, window, selection, parent.meta)
+        val dynamicChildren = runCatching { parent.childrenProvider?.invoke(ctx).orEmpty() }
+            .onFailure { t -> logger.warn("Dynamic menu children provider failed for '{}'", parent.id, t) }
+            .getOrDefault(emptyList())
+        return (staticChildren + dynamicChildren)
+            .sortedWith(compareBy({ it.order }, { it.title }))
     }
 
     private fun clearLayout() {

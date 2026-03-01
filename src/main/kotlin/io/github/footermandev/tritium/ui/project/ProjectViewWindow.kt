@@ -9,14 +9,15 @@ import io.github.footermandev.tritium.io.VPath
 import io.github.footermandev.tritium.logger
 import io.github.footermandev.tritium.platform.GameLauncher
 import io.github.footermandev.tritium.registry.DeferredRegistryBuilder
+import io.github.footermandev.tritium.ui.dashboard.SettingsDialog
 import io.github.footermandev.tritium.ui.helpers.runOnGuiThread
 import io.github.footermandev.tritium.ui.notifications.NotificationLink
 import io.github.footermandev.tritium.ui.notifications.NotificationMngr
 import io.github.footermandev.tritium.ui.notifications.NotificationRenderContext
 import io.github.footermandev.tritium.ui.notifications.Toaster
 import io.github.footermandev.tritium.ui.project.editor.EditorArea
-import io.github.footermandev.tritium.ui.project.editor.pane.SettingsEditorPane
 import io.github.footermandev.tritium.ui.project.menu.ProjectMenuBar
+import io.github.footermandev.tritium.ui.project.sidebar.ProjectFilesSidePanelProvider
 import io.github.footermandev.tritium.ui.project.sidebar.SidePanelMngr
 import io.github.footermandev.tritium.ui.settings.SettingsLink
 import io.github.footermandev.tritium.ui.theme.TColors
@@ -30,16 +31,11 @@ import io.github.footermandev.tritium.util.ByteUtils
 import io.qt.Nullable
 import io.qt.core.QByteArray
 import io.qt.core.QTimer
+import io.qt.core.Qt.DockWidgetArea
 import io.qt.core.Qt.ItemDataRole.UserRole
-import io.qt.gui.QAction
-import io.qt.gui.QCloseEvent
-import io.qt.gui.QResizeEvent
-import io.qt.gui.QShowEvent
+import io.qt.core.Qt.WidgetAttribute.WA_TransparentForMouseEvents
+import io.qt.gui.*
 import io.qt.widgets.*
-import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
 import kotlin.random.Random
 
@@ -54,13 +50,12 @@ class ProjectViewWindow internal constructor(
     private val json = Json { prettyPrint = true; ignoreUnknownKeys = true; }
     private val tDir: VPath = project.projectDir.resolve(".tr")
     private val stateFile: VPath = tDir.resolve("tritium-ui.json")
-    private val scope = CoroutineScope(Dispatchers.IO + SupervisorJob())
     private val defaultWindowSize: Pair<Int, Int> = CoreSettingValues.projectWindowDefaultSize()
 
     private val menuBarBuilder = ProjectMenuBar()
     private val menuBottomDivider = widget(this) {
         objectName = "projectMenuBottomDivider"
-        setAttribute(io.qt.core.Qt.WidgetAttribute.WA_TransparentForMouseEvents, true)
+        setAttribute(WA_TransparentForMouseEvents, true)
         setThemedStyle {
             selector("#projectMenuBottomDivider") {
                 backgroundColor(TColors.Surface2)
@@ -70,22 +65,18 @@ class ProjectViewWindow internal constructor(
         hide()
     }
     private val editorArea = EditorArea(project)
-    private val sidePanelMngr = SidePanelMngr(project, this) { id, dock ->
-        if(id == "project_files") {
-            val widget = dock.widget()
-            val tree = (widget as? QTreeWidget) ?: widget?.findChild(QTreeWidget::class.java)
-
-            tree?.itemDoubleClicked?.connect { item, _ ->
-                val path = item?.data(0, UserRole) as? VPath
-                if(path != null && !path.isDir()) {
-                    editorArea.openFile(path)
-                }
-            }
-        }
-    }
+    private lateinit var sidePanelMngr: SidePanelMngr
     private lateinit var notificationOverlay: Toaster
+    private val settingsDialog = SettingsDialog(this)
+    private val statePersistTimer = QTimer(this).apply {
+        isSingleShot = true
+        interval = 3_000
+        timeout.connect { persistState() }
+    }
 
-    private var uiState: ProjectUIState = loadState()
+    private var uiState: ProjectUIState = ProjectUIState()
+    private var lastPersistedState: ProjectUIState? = null
+    private var suppressStatePersistence: Boolean = false
     private var unsubscribeGameProcessListener: (() -> Unit)? = null
     private var unsubscribeRuntimePreparationListener: (() -> Unit)? = null
     private var unsubscribeTaskListener: (() -> Unit)? = null
@@ -93,10 +84,41 @@ class ProjectViewWindow internal constructor(
     private val menuItemsRegistry = BuiltinRegistries.MenuItem
 
     init {
+        uiState = loadState()
+        lastPersistedState = uiState
         windowTitle = "Tritium | " + project.name
         menuBarBuilder.attach(this)
 
+        sidePanelMngr = SidePanelMngr(
+            project = project,
+            parent = this,
+            onStateChanged = { scheduleStatePersist() }
+        ) { id, dock ->
+            if(id == "project_files") {
+                val tree = (dock.widget() as? QTreeWidget) ?: dock.widget()?.findChild(QTreeWidget::class.java)
+
+                tree?.itemDoubleClicked?.connect { item, _ ->
+                    val path = item?.data(0, UserRole) as? VPath
+                    if(path != null && !path.isDir()) {
+                        editorArea.openFile(path)
+                    }
+                }
+                tree?.itemExpanded?.connect { scheduleStatePersist() }
+                tree?.itemCollapsed?.connect { scheduleStatePersist() }
+                tree?.currentItemChanged?.connect { _, _ -> scheduleStatePersist() }
+
+                ProjectFilesSidePanelProvider.restoreDockTreeState(
+                    dock,
+                    ProjectFilesSidePanelProvider.TreeState(
+                        expandedPaths = uiState.projectFilesExpandedPaths.toSet(),
+                        selectedPath = uiState.projectFilesSelectedPath
+                    )
+                )
+            }
+        }
+
         setCentralWidget(editorArea.widget())
+        editorArea.onOpenFilesChanged = { scheduleStatePersist() }
         notificationOverlay = Toaster(project, this)
         QTimer.singleShot(0) { updateMenuBottomDivider() }
         applyState(uiState)
@@ -143,6 +165,7 @@ class ProjectViewWindow internal constructor(
 
     private fun applyState(state: ProjectUIState) {
         try {
+            suppressStatePersistence = true
             var restored = false
             state.mainWindowGeometry?.let {
                 if(restoreGeometry(QByteArray(state.mainWindowGeometry))) {
@@ -155,10 +178,23 @@ class ProjectViewWindow internal constructor(
                 resize(defaultWindowSize.first, defaultWindowSize.second)
             }
 
+            sidePanelMngr.restoreState(
+                state.sidePanels.mapNotNull { panel ->
+                    val area = parseDockArea(panel.area) ?: return@mapNotNull null
+                    SidePanelMngr.PersistedDockState(
+                        id = panel.id,
+                        area = area,
+                        visible = panel.visible
+                    )
+                }
+            )
+
             editorArea.restoreOpenFiles(state.openFiles)
         } catch (t: Throwable) {
             logger.warn("Failed to apply UI state for '{}'", project.name, t)
             resize(defaultWindowSize.first, defaultWindowSize.second)
+        } finally {
+            suppressStatePersistence = false
         }
     }
 
@@ -174,20 +210,44 @@ class ProjectViewWindow internal constructor(
         }
     }
 
-    private fun persistStateAsync() {
-        scope.launch(Dispatchers.IO) {
-            try {
-                ensureTDir()
-                val openFiles = editorArea.openFiles()
-                val geom = ByteUtils.toByteArray(saveGeometry().data())
-                val state = ByteUtils.toByteArray(saveState().data())
-                val s = ProjectUIState(openFiles = openFiles, mainWindowState = state, mainWindowGeometry = geom)
-                val txt = json.encodeToString(s)
-                stateFile.writeBytesAtomic(txt.toByteArray())
-            } catch (t: Throwable) {
-                logger.warn("Failed to persist UI state for '{}'", project.name, t)
+    private fun persistState() {
+        if (suppressStatePersistence) return
+        try {
+            ensureTDir()
+            val openFiles = editorArea.openFiles()
+            val geom = ByteUtils.toByteArray(saveGeometry().data())
+            val state = ByteUtils.toByteArray(saveState().data())
+            val sidePanels = sidePanelMngr.captureState().map { dock ->
+                ProjectUIState.SidePanelState(
+                    id = dock.id,
+                    area = dockAreaName(dock.area),
+                    visible = dock.visible
+                )
             }
+            val projectFilesDock = sidePanelMngr.dockWidgets()["project_files"]
+            val projectFilesTree = ProjectFilesSidePanelProvider.captureDockTreeState(projectFilesDock)
+            val s = ProjectUIState(
+                openFiles = openFiles,
+                sidePanels = sidePanels,
+                projectFilesExpandedPaths = projectFilesTree.expandedPaths.toList(),
+                projectFilesSelectedPath = projectFilesTree.selectedPath,
+                mainWindowState = state,
+                mainWindowGeometry = geom
+            )
+            if (s == lastPersistedState) {
+                return
+            }
+            val txt = json.encodeToString(s)
+            stateFile.writeBytesAtomic(txt.toByteArray())
+            lastPersistedState = s
+        } catch (t: Throwable) {
+            logger.warn("Failed to persist UI state for '{}'", project.name, t)
         }
+    }
+
+    private fun scheduleStatePersist() {
+        if (suppressStatePersistence) return
+        statePersistTimer.start()
     }
 
     private fun installNotificationTestShortcut() {
@@ -274,11 +334,36 @@ class ProjectViewWindow internal constructor(
         super.resizeEvent(event)
         updateMenuBottomDivider()
         if(::notificationOverlay.isInitialized) notificationOverlay.reposition()
+        scheduleStatePersist()
+    }
+
+    override fun moveEvent(event: @Nullable QMoveEvent?) {
+        super.moveEvent(event)
+        scheduleStatePersist()
     }
 
     override fun closeEvent(event: @Nullable QCloseEvent?) {
-        persistStateAsync()
+        if (!confirmCloseProjectIfNeeded()) {
+            event?.ignore()
+            return
+        }
+        statePersistTimer.stop()
+        persistState()
         super.closeEvent(event)
+    }
+
+    private fun dockAreaName(area: DockWidgetArea): String = when (area) {
+        DockWidgetArea.LeftDockWidgetArea -> "left"
+        DockWidgetArea.RightDockWidgetArea -> "right"
+        DockWidgetArea.BottomDockWidgetArea -> "bottom"
+        else -> "left"
+    }
+
+    private fun parseDockArea(area: String): DockWidgetArea? = when (area.trim().lowercase()) {
+        "left" -> DockWidgetArea.LeftDockWidgetArea
+        "right" -> DockWidgetArea.RightDockWidgetArea
+        "bottom" -> DockWidgetArea.BottomDockWidgetArea
+        else -> null
     }
 
     fun rebuildMenus() {
@@ -287,15 +372,22 @@ class ProjectViewWindow internal constructor(
     }
 
     /**
-     * Opens the project settings editor tab and optionally focuses [link].
+     * Adjusts font size for the active editor content.
      *
-     * @param link Optional target setting deep link.
+     * @return `true` when an editor text widget was updated.
+     */
+    fun adjustEditorFontSize(delta: Int): Boolean = editorArea.adjustActiveEditorFont(delta)
+
+    /**
+     * Canonical project identifier used by project-window routing logic.
+     */
+    fun projectCanonicalPath(): String = project.path.toString().trim()
+
+    /**
+     * Opens global settings and optionally focuses [link].
      */
     fun openSettings(link: SettingsLink? = null) {
-        val pane = editorArea.openFile(project.projectDir.resolve(".tr/settings.conf"))
-        if (link != null && pane is SettingsEditorPane) {
-            pane.openLink(link)
-        }
+        settingsDialog.open(link)
     }
 
     private fun updateMenuBottomDivider() {
@@ -312,6 +404,21 @@ class ProjectViewWindow internal constructor(
         menuBottomDivider.setGeometry(0, y, width(), 1)
         menuBottomDivider.show()
         menuBottomDivider.raise()
+    }
+
+    private fun confirmCloseProjectIfNeeded(): Boolean {
+        val policy = CoreSettingValues.closeProjectConfirmationPolicy()
+        if (policy != CoreSettingValues.CloseProjectConfirmationPolicy.Ask) return true
+
+        val box = QMessageBox(this)
+        box.icon = QMessageBox.Icon.Question
+        box.windowTitle = "Close Project"
+        box.text = "Close project '${project.name}'?"
+        box.informativeText = "This only closes this project window."
+        val closeButton = box.addButton("Close Project", QMessageBox.ButtonRole.AcceptRole)
+        box.addButton(QMessageBox.StandardButton.Cancel)
+        box.exec()
+        return box.clickedButton() == closeButton
     }
 
     companion object {

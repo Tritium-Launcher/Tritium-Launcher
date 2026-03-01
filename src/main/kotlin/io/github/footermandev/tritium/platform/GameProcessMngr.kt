@@ -96,6 +96,14 @@ object GameProcessMngr {
      */
     fun kill(projectPath: VPath, force: Boolean = true): Boolean {
         val scope = scopeOf(projectPath)
+        return killByScope(scope, force)
+    }
+
+    /**
+     * Request process termination for a canonical [projectScope].
+     */
+    fun killByScope(projectScope: String, force: Boolean = true): Boolean {
+        val scope = projectScope.trim()
         val tracked = synchronized(lock) { trackedByScope[scope] } ?: return false
         emit(GameProcessEvent(GameProcessEvent.Type.KillRequested, tracked.toContext()))
         return try {

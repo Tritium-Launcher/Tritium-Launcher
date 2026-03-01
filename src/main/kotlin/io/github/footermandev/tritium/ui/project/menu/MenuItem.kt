@@ -25,8 +25,11 @@ data class MenuItem(
     val meta: Map<String, String> = emptyMap(),
     val kind: MenuItemKind = MenuItemKind.MENU,
     val widgetFactory: ((MenuActionContext) -> QWidget)? = null,
+    val childrenProvider: ((MenuActionContext) -> List<MenuItem>)? = null,
     val tooltip: String? = null,
     val icon: QIcon? = null,
+    val titleResolver: ((MenuActionContext) -> String)? = null,
+    val visibleResolver: ((MenuActionContext) -> Boolean)? = null,
     val enabledResolver: ((MenuActionContext) -> Boolean)? = null,
     val iconResolver: ((MenuActionContext) -> QIcon?)? = null
 ): Registrable {
@@ -58,6 +61,29 @@ data class MenuItem(
             if (resolved != null) return resolved
         }
         return icon
+    }
+
+    /**
+     * Returns the resolved title for this item.
+     */
+    fun resolveTitle(ctx: MenuActionContext? = null): String {
+        if (ctx != null) {
+            val resolved = runCatching { titleResolver?.invoke(ctx) }.getOrNull()
+            if (!resolved.isNullOrBlank()) return resolved
+        }
+        return title
+    }
+
+    /**
+     * Returns the resolved visible state for this item.
+     */
+    fun isVisible(ctx: MenuActionContext? = null): Boolean {
+        if (!visible) return false
+        if (ctx != null) {
+            val resolved = runCatching { visibleResolver?.invoke(ctx) }.getOrNull()
+            if (resolved != null) return resolved
+        }
+        return true
     }
 
     /**

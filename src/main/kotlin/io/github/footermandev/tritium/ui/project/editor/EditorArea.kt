@@ -9,10 +9,7 @@ import io.github.footermandev.tritium.ui.theme.TColors
 import io.github.footermandev.tritium.ui.theme.qt.setThemedStyle
 import io.github.footermandev.tritium.ui.widgets.constructor_functions.vBoxLayout
 import io.qt.gui.QIcon
-import io.qt.widgets.QFrame
-import io.qt.widgets.QStackedWidget
-import io.qt.widgets.QTextEdit
-import io.qt.widgets.QWidget
+import io.qt.widgets.*
 
 /**
  * This is the main Editor area of [io.github.footermandev.tritium.ui.project.ProjectViewWindow],
@@ -21,6 +18,8 @@ import io.qt.widgets.QWidget
 class EditorArea(
     private val project: ProjectBase
 ) {
+    var onOpenFilesChanged: (() -> Unit)? = null
+
     private val container = QWidget()
     private val mainLayout = vBoxLayout(container)
     private val tabBar = EditorTabBar()
@@ -87,6 +86,7 @@ class EditorArea(
         tabBar.setCurrentIndex(idx)
         stack.currentIndex  = idx
         pane.onOpen()
+        onOpenFilesChanged?.invoke()
         return pane
     }
 
@@ -118,6 +118,7 @@ class EditorArea(
         tabBar.removeTab(idx)
         paneIdx.remove(idx)
         rebuild()
+        onOpenFilesChanged?.invoke()
     }
 
     private fun rebuild() {
@@ -138,12 +139,70 @@ class EditorArea(
     fun openFiles(): List<String> = paneIdx.values.map { it.file.toAbsolute().toString() }
 
     fun restoreOpenFiles(paths: List<String>) {
+        var changed = false
         for(p in paths) {
             try {
                 val v = VPath.get(p)
-                if(v.exists()) openFile(v)
+                if(v.exists()) {
+                    openFile(v)
+                    changed = true
+                }
             } catch (_: Throwable) {}
         }
+        if (changed) onOpenFilesChanged?.invoke()
+    }
+
+    /**
+     * Adjusts font size for the currently focused editor text widget.
+     *
+     * @return `true` when a text widget was found and updated.
+     */
+    fun adjustActiveEditorFont(delta: Int): Boolean {
+        fun adjust(current: Int): Int {
+            val base = if (current > 0) current else 11
+            return (base + delta).coerceIn(7, 48)
+        }
+
+        val target = when (val focused = QApplication.focusWidget()) {
+            is QTextEdit if isFromEditorArea(focused) -> focused
+            is QPlainTextEdit if isFromEditorArea(focused) -> focused
+            is QLineEdit if isFromEditorArea(focused) -> focused
+            else -> findTextWidgetInCurrentPane()
+        } ?: return false
+
+        when (target) {
+            is QTextEdit -> {
+                val font = target.font()
+                font.setPointSize(adjust(font.pointSize()))
+                target.font = font
+            }
+            is QPlainTextEdit -> {
+                val font = target.font()
+                font.setPointSize(adjust(font.pointSize()))
+                target.font = font
+            }
+            is QLineEdit -> {
+                val font = target.font()
+                font.setPointSize(adjust(font.pointSize()))
+                target.font = font
+            }
+            else -> return false
+        }
+        return true
+    }
+
+    private fun findTextWidgetInCurrentPane(): QWidget? {
+        val current = stack.currentWidget() ?: return null
+        if (current is QTextEdit || current is QPlainTextEdit || current is QLineEdit) return current
+        return current.findChild(QTextEdit::class.java)
+            ?: current.findChild(QPlainTextEdit::class.java)
+            ?: current.findChild(QLineEdit::class.java)
+    }
+
+    private fun isFromEditorArea(widget: QWidget?): Boolean {
+        if (widget == null) return false
+        if (widget.window() != container.window()) return false
+        return widget == container || container.isAncestorOf(widget)
     }
 
     private fun resolveFileIcon(file: VPath, project: ProjectBase): QIcon? {

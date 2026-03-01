@@ -36,6 +36,8 @@ object GameLauncher {
     private val pathSeparator = File.pathSeparator ?: ":"
     private val ansiRegex = Regex("\\u001B\\[[;\\d]*[ -/]*[@-~]")
     private const val MAX_MISSING_LIB_LOG = 12
+    private const val MODPACK_PROJECT_TYPE_ID = "modpack"
+    private const val DEFAULT_MAX_HEAP_MB = 2_048
     private val runtimePreparingScopes = ConcurrentHashMap<String, RuntimePreparationContext>()
     private val runtimePreparationListeners = CopyOnWriteArrayList<(RuntimePreparationEvent) -> Unit>()
 
@@ -262,6 +264,7 @@ object GameLauncher {
         if (loader.shouldStripMinecraftClientArtifacts(context)) {
             stripMinecraftArtifactsFromModulePath(jvmArgs)
         }
+        jvmArgs += parseAdditionalJvmArgs(project)
         val finalJvmArgs = ensureClasspathArg(stripUnsupportedArgs(jvmArgs), classpath)
         val companionToken = UUID.randomUUID().toString().replace("-", "")
         CompanionBridge.setSessionToken(companionToken)
@@ -269,11 +272,13 @@ object GameLauncher {
             add("-Dtritium.companion.ws.port=${CoreSettingValues.companionWsPort()}")
         }
 
+        val maxHeapMb = resolveMaxHeapMb(project)
+        val minHeapMb = minOf(1024, maxHeapMb)
         val command = mutableListOf<String>()
         command += javaExec.toAbsolute().toString()
         command += listOf(
-            "-Xms1G",
-            "-Xmx2G"
+            "-Xms${minHeapMb}M",
+            "-Xmx${maxHeapMb}M"
         )
         // Strip duplicate main-jar entries from the classpath
         val cpEntries = classpathEntries.filter { it.isNotBlank() }
@@ -358,6 +363,62 @@ object GameLauncher {
             return detected
         }
         return null
+    }
+
+    private fun resolveMaxHeapMb(project: ProjectBase): Int {
+        if (project.typeId != MODPACK_PROJECT_TYPE_ID) {
+            return DEFAULT_MAX_HEAP_MB
+        }
+        return CoreSettingValues.modpackMemoryMb().coerceAtLeast(512)
+    }
+
+    private fun parseAdditionalJvmArgs(project: ProjectBase): List<String> {
+        if (project.typeId != MODPACK_PROJECT_TYPE_ID) {
+            return emptyList()
+        }
+        val raw = CoreSettingValues.modpackJvmArgs()?.trim().orEmpty()
+        if (raw.isEmpty()) {
+            return emptyList()
+        }
+        return splitArgs(raw)
+    }
+
+    private fun splitArgs(value: String): List<String> {
+        val out = mutableListOf<String>()
+        val current = StringBuilder()
+        var quote: Char? = null
+        var escaping = false
+        value.forEach { ch ->
+            when {
+                escaping -> {
+                    current.append(ch)
+                    escaping = false
+                }
+                ch == '\\' && quote != null -> escaping = true
+                quote != null -> {
+                    if (ch == quote) {
+                        quote = null
+                    } else {
+                        current.append(ch)
+                    }
+                }
+                ch == '"' || ch == '\'' -> quote = ch
+                ch.isWhitespace() -> {
+                    if (current.isNotEmpty()) {
+                        out += current.toString()
+                        current.setLength(0)
+                    }
+                }
+                else -> current.append(ch)
+            }
+        }
+        if (escaping) {
+            current.append('\\')
+        }
+        if (current.isNotEmpty()) {
+            out += current.toString()
+        }
+        return out
     }
 
     /**

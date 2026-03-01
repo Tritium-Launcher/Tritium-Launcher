@@ -322,7 +322,7 @@ class SettingsView : QWidget() {
      * @return `true` when the setting was found and focused.
      */
     fun openLink(link: SettingsLink): Boolean {
-        val setting = SettingsMngr.findSetting(link.key) as? SettingNode<*> ?: return false
+        val setting = SettingsMngr.findSetting(link.key) ?: return false
         val category = SettingsMngr.findCategory(setting.categoryPath) ?: return false
 
         if (activeSearchQuery.isNotBlank()) {
@@ -856,7 +856,9 @@ class SettingsView : QWidget() {
         val widget = createWidget(descriptor, node)
 
         topLayout.addWidget(title, 1)
-        topLayout.addWidget(widget, 2)
+        topLayout.addStretch(1)
+        topLayout.addWidget(widget, 0)
+        topLayout.setAlignment(widget, Qt.AlignmentFlag.AlignRight)
         topLayout.addWidget(resetBtn, 0)
         layout.addWidget(topRow)
 

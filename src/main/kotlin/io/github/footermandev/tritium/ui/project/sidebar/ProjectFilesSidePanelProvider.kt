@@ -10,10 +10,7 @@ import io.github.footermandev.tritium.ui.theme.TIcons
 import io.github.footermandev.tritium.ui.theme.qt.icon
 import io.qt.core.Qt.ItemDataRole.UserRole
 import io.qt.gui.QIcon
-import io.qt.widgets.QAbstractItemView
-import io.qt.widgets.QFrame
-import io.qt.widgets.QTreeWidget
-import io.qt.widgets.QTreeWidgetItem
+import io.qt.widgets.*
 
 /**
  * The standard project files view while a Project is open.
@@ -22,6 +19,10 @@ import io.qt.widgets.QTreeWidgetItem
  * @see DockWidget
  */
 class ProjectFilesSidePanelProvider: SidePanelProvider {
+    data class TreeState(
+        val expandedPaths: Set<String>,
+        val selectedPath: String?
+    )
 
     override val id: String = "project_files"
     override val displayName: String = "Project Files"
@@ -43,7 +44,9 @@ class ProjectFilesSidePanelProvider: SidePanelProvider {
         dock.setWidget(tree)
 
         fun refresh() {
+            val stateBeforeRefresh = captureTreeState(tree)
             populateTree(project, tree)
+            restoreTreeState(tree, stateBeforeRefresh)
         }
 
         DeferredRegistryBuilder(BuiltinRegistries.FileType) { _ ->
@@ -78,6 +81,71 @@ class ProjectFilesSidePanelProvider: SidePanelProvider {
             val primary = matches.firstOrNull()
             if(primary != null && primary.icon != null) item.setIcon(0, primary.icon ?: TIcons.File.icon)
             if(c.isDir()) buildNode(c, item, project)
+        }
+    }
+
+    companion object {
+        fun captureDockTreeState(dock: QDockWidget?): TreeState {
+            val tree = dock?.widget() as? QTreeWidget ?: return TreeState(emptySet(), null)
+            return captureTreeState(tree)
+        }
+
+        fun restoreDockTreeState(dock: QDockWidget?, state: TreeState) {
+            val tree = dock?.widget() as? QTreeWidget ?: return
+            restoreTreeState(tree, state)
+        }
+
+        private fun captureTreeState(tree: QTreeWidget): TreeState {
+            val expanded = linkedSetOf<String>()
+            val root = tree.invisibleRootItem() ?: return TreeState(emptySet(), null)
+
+            fun walk(item: QTreeWidgetItem) {
+                val path = (item.data(0, UserRole) as? VPath)?.toAbsolute()?.toString()
+                if(item.isExpanded && !path.isNullOrBlank()) {
+                    expanded.add(path)
+                }
+                for(i in 0 until item.childCount()) {
+                    val child = item.child(i) ?: continue
+                    walk(child)
+                }
+            }
+
+            for(i in 0 until root.childCount()) {
+                val child = root.child(i) ?: continue
+                walk(child)
+            }
+
+            val selectedPath = (tree.currentItem()?.data(0, UserRole) as? VPath)?.toAbsolute()?.toString()
+            return TreeState(expandedPaths = expanded, selectedPath = selectedPath)
+        }
+
+        private fun restoreTreeState(tree: QTreeWidget, state: TreeState) {
+            val root = tree.invisibleRootItem() ?: return
+            var selectedItem: QTreeWidgetItem? = null
+
+            fun walk(item: QTreeWidgetItem) {
+                val path = (item.data(0, UserRole) as? VPath)?.toAbsolute()?.toString()
+                if(!path.isNullOrBlank() && state.expandedPaths.contains(path)) {
+                    item.isExpanded = true
+                }
+                if(selectedItem == null && !path.isNullOrBlank() && path == state.selectedPath) {
+                    selectedItem = item
+                }
+                for(i in 0 until item.childCount()) {
+                    val child = item.child(i) ?: continue
+                    walk(child)
+                }
+            }
+
+            for(i in 0 until root.childCount()) {
+                val child = root.child(i) ?: continue
+                walk(child)
+            }
+
+            selectedItem?.let { item ->
+                tree.setCurrentItem(item)
+                tree.scrollToItem(item)
+            }
         }
     }
 }

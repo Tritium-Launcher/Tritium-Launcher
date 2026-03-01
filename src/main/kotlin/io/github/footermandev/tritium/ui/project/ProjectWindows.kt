@@ -19,13 +19,60 @@ object ProjectWindows {
 
     private val openWindows = ConcurrentHashMap<String, CompletableDeferred<ProjectViewWindow>>()
 
+    enum class OpenMode {
+        NEW_WINDOW,
+        CURRENT_WINDOW
+    }
+
     /**
      * Open (or focus) a project window for [project].
      *
      * @param closeDashboard When true, closes the dashboard after opening.
      */
     @OptIn(ExperimentalCoroutinesApi::class)
-    fun openProject(project: ProjectBase, closeDashboard: Boolean = true) {
+    fun openProject(
+        project: ProjectBase,
+        closeDashboard: Boolean = true,
+        mode: OpenMode = OpenMode.NEW_WINDOW
+    ) {
+        if (mode == OpenMode.CURRENT_WINDOW) {
+            openProjectInCurrentWindow(project, closeDashboard)
+            return
+        }
+        openProjectInternal(project, closeDashboard)
+    }
+
+    private fun openProjectInCurrentWindow(project: ProjectBase, closeDashboard: Boolean) {
+        val replacement = preferredWindowForReuse()
+        if (replacement == null) {
+            openProjectInternal(project, closeDashboard)
+            return
+        }
+
+        val targetCanonical = project.path.toString().trim()
+        if (replacement.projectCanonicalPath() == targetCanonical) {
+            openProjectInternal(project, closeDashboard)
+            return
+        }
+
+        openProjectInternal(project, closeDashboard)
+        val deferred = openWindows[targetCanonical] ?: return
+        deferred.invokeOnCompletion {
+            if (!deferred.isCompleted || deferred.isCancelled) return@invokeOnCompletion
+            runOnGuiThread {
+                try {
+                    if (replacement.isVisible) {
+                        replacement.close()
+                    }
+                } catch (t: Throwable) {
+                    logger.debug("Failed closing replaced project window", t)
+                }
+            }
+        }
+    }
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    private fun openProjectInternal(project: ProjectBase, closeDashboard: Boolean) {
         val canonical = project.path.toString().trim()
 
         val newDeferred = CompletableDeferred<ProjectViewWindow>()
@@ -74,6 +121,12 @@ object ProjectWindows {
             }
         }
         return
+    }
+
+    private fun preferredWindowForReuse(): ProjectViewWindow? {
+        val active = QApplication.activeWindow() as? ProjectViewWindow
+        if (active != null && active.isVisible) return active
+        return anyOpenWindow()
     }
 
     /**

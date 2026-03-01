@@ -1,7 +1,6 @@
 package io.github.footermandev.tritium.ui.notifications
 
 import io.github.footermandev.tritium.core.project.ProjectBase
-import io.github.footermandev.tritium.core.project.settings.ProjectScopedSettingsMngr
 import io.github.footermandev.tritium.extension.core.BuiltinRegistries
 import io.github.footermandev.tritium.fromTR
 import io.github.footermandev.tritium.io.VPath
@@ -196,7 +195,7 @@ object NotificationMngr {
             val set = projectDisabledSetLocked(project)
             changed = set.add(normalizedId)
             if (changed) {
-                persistProjectPrefsLocked(project, set)
+                persistGlobalPrefsLocked()
             }
             dismissMatchingLocked(normalizedId) { it == scope }
         }
@@ -237,7 +236,7 @@ object NotificationMngr {
             val set = projectDisabledSetLocked(project)
             val removed = set.remove(normalizedId)
             if (removed) {
-                persistProjectPrefsLocked(project, set)
+                persistGlobalPrefsLocked()
             }
             removed
         }
@@ -434,15 +433,30 @@ object NotificationMngr {
         globalDisabledIds += decoded.disabledIds
             .map { it.trim() }
             .filter { it.isNotEmpty() }
+        projectDisabledByScope.clear()
+        decoded.disabledIdsByScope.forEach { (scopeRaw, idsRaw) ->
+            val scope = scopeRaw.trim()
+            if (scope.isEmpty()) return@forEach
+            val normalized = idsRaw
+                .map { it.trim() }
+                .filter { it.isNotEmpty() }
+                .toMutableSet()
+            if (normalized.isNotEmpty()) {
+                projectDisabledByScope[scope] = normalized
+            }
+        }
     }
 
     private fun persistGlobalPrefsLocked() {
         try {
             globalPrefsPath.parent().mkdirs()
             val encoded = json.encodeToString(
-                GlobalNotificationPreferences.serializer(),
-                GlobalNotificationPreferences(disabledIds = globalDisabledIds.toSet())
-            )
+                    GlobalNotificationPreferences.serializer(),
+                    GlobalNotificationPreferences(
+                        disabledIds = globalDisabledIds.toSet(),
+                        disabledIdsByScope = projectDisabledByScope.mapValues { (_, ids) -> ids.toSet() }
+                    )
+                )
             globalPrefsPath.writeBytesAtomic(encoded.toByteArray())
         } catch (t: Throwable) {
             logger.warn("Failed to persist notification preferences to {}", globalPrefsPath, t)
@@ -451,29 +465,13 @@ object NotificationMngr {
 
     private fun projectDisabledSetLocked(project: ProjectBase): MutableSet<String> {
         val scope = scopeOf(project)
-        return projectDisabledByScope.getOrPut(scope) {
-            loadProjectPrefs(project).toMutableSet()
-        }
-    }
-
-    private fun loadProjectPrefs(project: ProjectBase): Set<String> {
-        return ProjectScopedSettingsMngr.readStringSetPref(
-            project,
-            ProjectScopedSettingsMngr.PREF_NOTIFICATIONS_IGNORE
-        )
-    }
-
-    private fun persistProjectPrefsLocked(project: ProjectBase, disabledIds: Set<String>) {
-        ProjectScopedSettingsMngr.writeStringSetPref(
-            project,
-            ProjectScopedSettingsMngr.PREF_NOTIFICATIONS_IGNORE,
-            disabledIds
-        )
+        return projectDisabledByScope.getOrPut(scope) { linkedSetOf() }
     }
 
     @Serializable
     private data class GlobalNotificationPreferences(
-        val disabledIds: Set<String> = emptySet()
+        val disabledIds: Set<String> = emptySet(),
+        val disabledIdsByScope: Map<String, Set<String>> = emptyMap()
     )
 }
 

@@ -12,6 +12,12 @@ private val WINDOW_SIZE_REGEX = Regex("^([1-9][0-9]{0,4})x([1-9][0-9]{0,4})$")
 internal object CoreSettingKeys {
     val GitPath: NamespacedId = NamespacedId("tritium", "git.path")
     val CloseDashboardOnProjectOpen: NamespacedId = NamespacedId("tritium", "projects.close_dashboard_on_open")
+    val CloseGameOnExit: NamespacedId = NamespacedId("tritium", "app.close_game_on_exit")
+    val ProjectOpenWindowPrompt: NamespacedId = NamespacedId("tritium", "projects.open_window_prompt")
+    val ProjectOpenWindowDefault: NamespacedId = NamespacedId("tritium", "projects.open_window_default")
+    val CloseProjectConfirmation: NamespacedId = NamespacedId("tritium", "projects.close_confirmation")
+    val ModpackJvmArgs: NamespacedId = NamespacedId("tritium", "modpack.mc_args")
+    val ModpackMemoryMb: NamespacedId = NamespacedId("tritium", "modpack.mc_memory_mb")
     val DashboardWindowSize: NamespacedId = NamespacedId("tritium", "ui.dashboard.window_size")
     val ProjectWindowDefaultSize: NamespacedId = NamespacedId("tritium", "ui.project_window.default_size")
     val GameLaunchMaximized: NamespacedId = NamespacedId("tritium", "game.maximized")
@@ -31,11 +37,108 @@ internal object CoreSettingKeys {
 internal object CoreSettingValues {
     private val logger = logger()
 
+    enum class CloseGameOnExitPolicy {
+        Never,
+        Ask,
+        Always
+    }
+
+    enum class ProjectOpenPromptMode {
+        Never,
+        Always
+    }
+
+    enum class ProjectOpenDefaultTarget {
+        Current,
+        New
+    }
+
+    enum class CloseProjectConfirmationPolicy {
+        Never,
+        Ask
+    }
+
     /**
      * Whether dashboard should close when opening a project window.
      */
     fun closeDashboardOnProjectOpen(): Boolean =
         (SettingsMngr.currentValueOrNull(CoreSettingKeys.CloseDashboardOnProjectOpen) as? Boolean) ?: true
+
+    /**
+     * Controls whether running game processes are closed when Tritium exits.
+     */
+    fun closeGameOnExitPolicy(): CloseGameOnExitPolicy {
+        return parseEnumSetting(
+            key = CoreSettingKeys.CloseGameOnExit,
+            fallback = CloseGameOnExitPolicy.Never,
+            mapping = mapOf(
+                "never" to CloseGameOnExitPolicy.Never,
+                "ask" to CloseGameOnExitPolicy.Ask,
+                "always" to CloseGameOnExitPolicy.Always
+            )
+        )
+    }
+
+    /**
+     * Controls whether project opening should ask for current/new window target.
+     */
+    fun projectOpenPromptMode(): ProjectOpenPromptMode {
+        return parseEnumSetting(
+            key = CoreSettingKeys.ProjectOpenWindowPrompt,
+            fallback = ProjectOpenPromptMode.Always,
+            mapping = mapOf(
+                "always" to ProjectOpenPromptMode.Always,
+                "never" to ProjectOpenPromptMode.Never
+            )
+        )
+    }
+
+    /**
+     * Default target used when project-open prompting is disabled.
+     */
+    fun projectOpenDefaultTarget(): ProjectOpenDefaultTarget {
+        return parseEnumSetting(
+            key = CoreSettingKeys.ProjectOpenWindowDefault,
+            fallback = ProjectOpenDefaultTarget.Current,
+            mapping = mapOf(
+                "current" to ProjectOpenDefaultTarget.Current,
+                "new" to ProjectOpenDefaultTarget.New
+            )
+        )
+    }
+
+    /**
+     * Controls whether closing a project window asks for confirmation.
+     */
+    fun closeProjectConfirmationPolicy(): CloseProjectConfirmationPolicy {
+        return parseEnumSetting(
+            key = CoreSettingKeys.CloseProjectConfirmation,
+            fallback = CloseProjectConfirmationPolicy.Never,
+            mapping = mapOf(
+                "never" to CloseProjectConfirmationPolicy.Never,
+                "ask" to CloseProjectConfirmationPolicy.Ask
+            )
+        )
+    }
+
+    /**
+     * Optional extra JVM argument string for modpack launches.
+     */
+    fun modpackJvmArgs(): String? = readOptionalText(CoreSettingKeys.ModpackJvmArgs)
+
+    /**
+     * Default modpack memory allocation in megabytes.
+     */
+    fun modpackMemoryMb(): Int {
+        val fallback = 6144
+        val raw = readOptionalText(CoreSettingKeys.ModpackMemoryMb) ?: return fallback
+        val parsed = raw.toIntOrNull()
+        if (parsed == null || parsed !in 512..262_144) {
+            logger.warn("Invalid memory value '{}' for {}. Falling back to {}", raw, CoreSettingKeys.ModpackMemoryMb, fallback)
+            return fallback
+        }
+        return parsed
+    }
 
     /**
      * Fixed dashboard window size.
@@ -140,5 +243,17 @@ internal object CoreSettingValues {
     private fun readOptionalText(key: NamespacedId): String? {
         val raw = (SettingsMngr.currentValueOrNull(key) as? String)?.trim().orEmpty()
         return raw.takeIf { it.isNotBlank() }
+    }
+
+    private fun <T> parseEnumSetting(
+        key: NamespacedId,
+        fallback: T,
+        mapping: Map<String, T>
+    ): T {
+        val raw = readOptionalText(key)?.lowercase() ?: return fallback
+        return mapping[raw] ?: run {
+            logger.warn("Invalid setting value '{}' for {}. Falling back to {}", raw, key, fallback)
+            fallback
+        }
     }
 }

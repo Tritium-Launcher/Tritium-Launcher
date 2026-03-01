@@ -3,9 +3,11 @@ package io.github.footermandev.tritium
 import io.github.footermandev.tritium.accounts.MicrosoftAuth.attemptAutoSignIn
 import io.github.footermandev.tritium.bootstrap.runLowPriorityTasks
 import io.github.footermandev.tritium.bootstrap.startHost
+import io.github.footermandev.tritium.extension.core.CoreSettingValues
 import io.github.footermandev.tritium.font.loadFont
 import io.github.footermandev.tritium.git.Git
 import io.github.footermandev.tritium.logging.Logs
+import io.github.footermandev.tritium.platform.GameProcessMngr
 import io.github.footermandev.tritium.platform.Platform
 import io.github.footermandev.tritium.ui.dashboard.Dashboard
 import io.github.footermandev.tritium.ui.logging.Hotkeys
@@ -16,6 +18,7 @@ import io.qt.core.Qt
 import io.qt.gui.QFont
 import io.qt.gui.QIcon
 import io.qt.widgets.QApplication
+import io.qt.widgets.QMessageBox
 import io.qt.widgets.QWidget
 import kotlinx.coroutines.runBlocking
 import org.slf4j.Logger
@@ -71,6 +74,7 @@ class Main {
             QApplication.setWindowIcon(QIcon(resourceIcon("icons/tritium.png", TConstants.classLoader)!!))
             QApplication.setDesktopFileName("tritium")
             QApplication.setApplicationName("tritium")
+            TApp.aboutToQuit.connect { handleRunningGamesOnExit() }
 
             Dashboard.createAndShow()
 
@@ -79,6 +83,42 @@ class Main {
             }
 
             QApplication.exec()
+        }
+
+        private fun handleRunningGamesOnExit() {
+            val running = GameProcessMngr.active().filter { it.isRunning }
+            if (running.isEmpty()) return
+
+            val policy = CoreSettingValues.closeGameOnExitPolicy()
+            val shouldClose = when (policy) {
+                CoreSettingValues.CloseGameOnExitPolicy.Never -> false
+                CoreSettingValues.CloseGameOnExitPolicy.Always -> true
+                CoreSettingValues.CloseGameOnExitPolicy.Ask -> {
+                    val count = running.size
+                    val question = if (count == 1) {
+                        "Close the running game process before exiting?"
+                    } else {
+                        "Close $count running game processes before exiting?"
+                    }
+                    val parent = QApplication.activeWindow() ?: Dashboard.I
+                    val choice = QMessageBox.question(
+                        parent,
+                        "Close Running Game",
+                        question,
+                        QMessageBox.StandardButtons(
+                            QMessageBox.StandardButton.Yes,
+                            QMessageBox.StandardButton.No
+                        ),
+                        QMessageBox.StandardButton.Yes
+                    )
+                    choice == QMessageBox.StandardButton.Yes
+                }
+            }
+            if (!shouldClose) return
+
+            running.forEach { ctx ->
+                GameProcessMngr.killByScope(ctx.projectScope, force = true)
+            }
         }
 
         private fun applyStartupFont() {

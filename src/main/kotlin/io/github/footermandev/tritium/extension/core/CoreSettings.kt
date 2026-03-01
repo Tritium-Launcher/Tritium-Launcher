@@ -5,9 +5,12 @@ import io.github.footermandev.tritium.settings.RefreshableSettingWidget
 import io.github.footermandev.tritium.settings.SettingWidgetContext
 import io.github.footermandev.tritium.settings.settingsDefinition
 import io.github.footermandev.tritium.ui.widgets.InfoLineEditWidget
+import io.github.footermandev.tritium.ui.widgets.TComboBox
 import io.github.footermandev.tritium.ui.widgets.constructor_functions.hBoxLayout
 import io.github.footermandev.tritium.ui.widgets.constructor_functions.label
 import io.qt.core.Qt
+import io.qt.widgets.QComboBox
+import io.qt.widgets.QSizePolicy
 import io.qt.widgets.QWidget
 import kotlinx.serialization.builtins.serializer
 
@@ -131,6 +134,84 @@ private class WindowSizeWidget(
     }
 }
 
+private data class ChoiceSettingOption(
+    val value: String,
+    val label: String
+)
+
+private class ChoiceSettingWidget(
+    private val ctx: SettingWidgetContext<String>,
+    private val options: List<ChoiceSettingOption>
+) : QWidget(), RefreshableSettingWidget {
+    private val combo = TComboBox()
+    private var isRefreshing = false
+
+    init {
+        val layout = hBoxLayout(this) {
+            setContentsMargins(0, 0, 0, 0)
+            widgetSpacing = 0
+            setAlignment(Qt.AlignmentFlag.AlignVCenter)
+        }
+        combo.sizeAdjustPolicy = QComboBox.SizeAdjustPolicy.AdjustToContents
+        combo.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        options.forEach { option ->
+            combo.addItem(option.label, option.value)
+        }
+        applyContentWidth()
+        layout.addWidget(combo, 1)
+
+        combo.currentIndexChanged.connect {
+            if (isRefreshing) return@connect
+            val selected = combo.currentData(Qt.ItemDataRole.UserRole)?.toString()?.trim().orEmpty()
+            if (selected.isNotBlank()) {
+                ctx.updateValue(selected)
+            }
+        }
+
+        refreshFromSettingValue()
+    }
+
+    override fun refreshFromSettingValue() {
+        isRefreshing = true
+        try {
+            val current = ctx.currentValue().trim()
+            val fallback = ctx.descriptor.defaultValue.trim()
+            val target = when {
+                hasOptionValue(current) -> current
+                hasOptionValue(fallback) -> fallback
+                else -> options.firstOrNull()?.value.orEmpty()
+            }
+            if (target.isBlank()) return
+            val idx = indexOfValue(target)
+            if (idx >= 0) combo.currentIndex = idx
+        } finally {
+            isRefreshing = false
+        }
+    }
+
+    private fun hasOptionValue(value: String): Boolean = options.any { it.value.equals(value, ignoreCase = true) }
+
+    private fun indexOfValue(target: String): Int {
+        for (i in 0 until combo.count) {
+            val value = combo.itemData(i, Qt.ItemDataRole.UserRole)?.toString()?.trim().orEmpty()
+            if (value.equals(target, ignoreCase = true)) return i
+        }
+        return -1
+    }
+
+    private fun applyContentWidth() {
+        val metrics = combo.fontMetrics()
+        val longestLabelWidth = options.maxOfOrNull { option ->
+            metrics.horizontalAdvance(option.label)
+        } ?: 0
+        val extraChrome = 56
+        val width = (longestLabelWidth + extraChrome).coerceAtLeast(140)
+        combo.minimumWidth = width
+        combo.maximumWidth = width
+        combo.adjustSize()
+    }
+}
+
 /**
  * Core settings schema declarations.
  *
@@ -155,6 +236,12 @@ internal object CoreSettings {
             allowForeignSettings = true
         }
 
+        val minecraft = category("minecraft") {
+            title = "Minecraft"
+            parent = projects
+            allowForeignSettings = true
+        }
+
         val companionBridge = category("companion_bridge") {
             title = "Companion Bridge"
             parent = projects
@@ -176,7 +263,104 @@ internal object CoreSettings {
             )
         }
 
-        toggle(projects.path, "minecraft.include_prerelease_versions") {
+        widget(projects.path, "app.close_game_on_exit") {
+            title = "Close Game On Tritium Exit"
+            description = "Controls whether running game processes are closed when Tritium exits."
+            defaultValue = "never"
+            serializer = String.serializer()
+            comments = listOf(
+                "Allowed values: never, ask, always."
+            )
+            widgetFactory = { ctx ->
+                ChoiceSettingWidget(
+                    ctx,
+                    options = listOf(
+                        ChoiceSettingOption("never", "Never"),
+                        ChoiceSettingOption("ask", "Ask"),
+                        ChoiceSettingOption("always", "Always")
+                    )
+                )
+            }
+        }
+
+        val projectOpenPrompt = widget(projects.path, "projects.open_window_prompt") {
+            title = "Ask Where To Open Project"
+            description = "Prompt to open projects in the current window or a new window when another project window already exists."
+            defaultValue = "always"
+            serializer = String.serializer()
+            comments = listOf(
+                "Allowed values: always, never."
+            )
+            widgetFactory = { ctx ->
+                ChoiceSettingWidget(
+                    ctx,
+                    options = listOf(
+                        ChoiceSettingOption("always", "Always"),
+                        ChoiceSettingOption("never", "Never")
+                    )
+                )
+            }
+        }
+
+        val projectOpenDefault = widget(projects.path, "projects.open_window_default") {
+            title = "Default Project Window Target"
+            defaultValue = "current"
+            serializer = String.serializer()
+            comments = listOf(
+                "Allowed values: current, new."
+            )
+            widgetFactory = { ctx ->
+                ChoiceSettingWidget(
+                    ctx,
+                    options = listOf(
+                        ChoiceSettingOption("current", "Current Window"),
+                        ChoiceSettingOption("new", "New Window")
+                    )
+                )
+            }
+        }
+        projectOpenPrompt.addChild(projectOpenDefault) { mode -> mode.equals("never", ignoreCase = true) }
+
+        widget(projects.path, "projects.close_confirmation") {
+            title = "Confirm Before Closing Project"
+            description = "Prompts before closing a project window."
+            defaultValue = "never"
+            serializer = String.serializer()
+            comments = listOf(
+                "Allowed values: never, ask."
+            )
+            widgetFactory = { ctx ->
+                ChoiceSettingWidget(
+                    ctx,
+                    options = listOf(
+                        ChoiceSettingOption("never", "Never"),
+                        ChoiceSettingOption("ask", "Ask")
+                    )
+                )
+            }
+        }
+
+        text(minecraft.path, "modpack.mc_args") {
+            title = "Modpack JVM Args"
+            description = "Additional JVM arguments to append for modpack launches."
+            defaultValue = ""
+            placeholder = "-Dexample=true"
+            comments = listOf(
+                "Space-separated extra JVM arguments for modpack launch."
+            )
+        }
+
+        text(minecraft.path, "modpack.mc_memory_mb") {
+            title = "Modpack Memory (MB)"
+            description = "Default memory allocation in MB for modpack launches."
+            defaultValue = "6144"
+            placeholder = "6144"
+            comments = listOf(
+                "Memory allocation for modpack launches in megabytes."
+            )
+        }
+
+        toggle(minecraft.path, "minecraft.include_prerelease_versions") {
             title = "Include Pre-release MC Versions"
             description = "Include snapshot, pre-release, and release-candidate Minecraft versions in selectors."
             defaultValue = false

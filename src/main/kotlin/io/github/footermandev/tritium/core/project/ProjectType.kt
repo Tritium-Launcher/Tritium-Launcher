@@ -1,6 +1,5 @@
 package io.github.footermandev.tritium.core.project
 
-import io.github.footermandev.tritium.core.project.settings.ProjectSettingDefinition
 import io.github.footermandev.tritium.core.project.templates.TemplateExecutionResult
 import io.github.footermandev.tritium.registry.Registrable
 import io.qt.gui.QIcon
@@ -16,7 +15,11 @@ interface ProjectType: Registrable {
     val description: String
     val icon: QIcon
     val order: Int
-    val projectSettings: List<ProjectSettingDefinition> get() = emptyList()
+    /**
+     * Controls which menu items appear for this project type in [io.github.footermandev.tritium.ui.project.menu.ProjectMenuBar].
+     */
+    val menuScope: ProjectMenuScope
+        get() = ProjectMenuScope.all()
 
     /**
      * Build a setup widget for collecting project variables.

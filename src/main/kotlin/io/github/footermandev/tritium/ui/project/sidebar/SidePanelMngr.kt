@@ -28,8 +28,15 @@ import kotlin.math.abs
 class SidePanelMngr(
     private val project: ProjectBase,
     private val parent: QMainWindow,
+    private val onStateChanged: () -> Unit = {},
     private val onDockCreated: (String, DockWidget) -> Unit = { _, _ -> },
 ) {
+    data class PersistedDockState(
+        val id: String,
+        val area: Qt.DockWidgetArea,
+        val visible: Boolean
+    )
+
     private val dockDragMimeType = "application/x-dock-id"
     private val dragInstalledProperty = "dockDragInstalled"
 
@@ -42,6 +49,7 @@ class SidePanelMngr(
     private val bottomBar = createSidebar(Qt.ToolBarArea.BottomToolBarArea)
 
     private val dockActions = mutableMapOf<String, QAction>()
+    private val pendingDockStates = mutableMapOf<String, PersistedDockState>()
     private var leftSpacerAction: QAction? = null
     private var rightSpacerAction: QAction? = null
     private var bottomTaskSpacerAction: QAction? = null
@@ -179,10 +187,13 @@ class SidePanelMngr(
                 providersById[p.id] = p
                 dock.features = QDockWidget.DockWidgetFeatures(QDockWidget.DockWidgetFeature.NoDockWidgetFeatures)
 
+                val persisted = pendingDockStates[p.id]
+                val initialArea = persisted?.area ?: normalizeDockArea(p.preferredArea)
+
                 val action = QAction(p.icon, "").apply {
                     toolTip = p.displayName
                     isCheckable = true
-                    isChecked = dock.isVisible
+                    isChecked = persisted?.visible ?: dock.isVisible
                     triggered.connect { checked ->
                         if(checked) {
                             dock.show()
@@ -194,22 +205,24 @@ class SidePanelMngr(
                 }
                 dock.visibilityChanged.connect { visible ->
                     if(action.isChecked != visible) action.isChecked = visible
+                    onStateChanged()
                 }
                 dockActions[p.id] = action
 
-                val area = normalizeDockArea(p.preferredArea)
-                parent.addDockWidget(area, dock)
-                addDockActionToToolbar(area, action, p.id)
+                parent.addDockWidget(initialArea, dock)
+                addDockActionToToolbar(initialArea, action, p.id)
+                setDockVisibility(dock, action, persisted?.visible ?: true)
 
                 dock.objectName = p.id
                 applyDockAreaChrome(dock)
                 dock.applyIcon(p.icon)
 
-                setupTitleBar(dock, p, area)
+                setupTitleBar(dock, p, initialArea)
                 dock.destroyed.connect {
                     dockStyleDisposers.remove(dock)?.invoke()
                 }
                 onDockCreated(p.id, dock)
+                onStateChanged()
             } catch (t: Throwable) {
                 logger.warn("Failed to create side panel {}", p.id, t)
             }
@@ -278,6 +291,7 @@ class SidePanelMngr(
 
         setupTitleBar(dock, provider, area)
         refreshBottomTaskIndicator()
+        onStateChanged()
     }
 
     private fun addDockActionToToolbar(area: Qt.DockWidgetArea, action: QAction, providerId: String) {
@@ -455,6 +469,16 @@ class SidePanelMngr(
         moveDock(dock, provider, area)
     }
 
+    private fun setDockVisibility(dock: DockWidget, action: QAction, visible: Boolean) {
+        if (visible) {
+            dock.show()
+            dock.raise()
+        } else {
+            dock.hide()
+        }
+        action.isChecked = visible
+    }
+
     private fun installBottomTaskIndicator() {
         val spacer = QWidget(bottomBar).apply {
             sizePolicy = QSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
@@ -544,4 +568,30 @@ class SidePanelMngr(
     }
 
     fun dockWidgets(): Map<String, QDockWidget> = HashMap(docks)
+
+    fun captureState(): List<PersistedDockState> {
+        return docks.entries.map { (id, dock) ->
+            PersistedDockState(
+                id = id,
+                area = normalizeDockArea(parent.dockWidgetArea(dock)),
+                visible = dock.isVisible
+            )
+        }
+    }
+
+    fun restoreState(states: List<PersistedDockState>) {
+        pendingDockStates.clear()
+        states.forEach { state ->
+            pendingDockStates[state.id] = state
+        }
+
+        states.forEach { state ->
+            val dock = docks[state.id] ?: return@forEach
+            val provider = providersById[state.id] ?: return@forEach
+            val area = normalizeDockArea(state.area)
+            moveDock(dock, provider, area)
+            val action = dockActions[state.id] ?: return@forEach
+            setDockVisibility(dock, action, state.visible)
+        }
+    }
 }

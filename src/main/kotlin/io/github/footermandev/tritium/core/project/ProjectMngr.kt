@@ -1,12 +1,10 @@
 package io.github.footermandev.tritium.core.project
 
 import io.github.footermandev.tritium.TConstants
-import io.github.footermandev.tritium.core.project.settings.ProjectScopedSettingsMngr
 import io.github.footermandev.tritium.core.project.templates.MigrationRegistry
 import io.github.footermandev.tritium.core.project.templates.ProjectFileLoader
 import io.github.footermandev.tritium.core.project.templates.TemplateDescriptor
 import io.github.footermandev.tritium.core.project.templates.TemplateRegistry
-import io.github.footermandev.tritium.extension.core.BuiltinRegistries
 import io.github.footermandev.tritium.extension.core.CoreSettingValues
 import io.github.footermandev.tritium.fromTR
 import io.github.footermandev.tritium.io.VPath
@@ -14,6 +12,8 @@ import io.github.footermandev.tritium.logger
 import io.github.footermandev.tritium.ui.dashboard.Dashboard
 import io.github.footermandev.tritium.ui.project.ProjectWindows
 import io.github.footermandev.tritium.ui.theme.TIcons
+import io.qt.widgets.QApplication
+import io.qt.widgets.QMessageBox
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerializationException
@@ -91,39 +91,6 @@ object ProjectMngr {
         listeners.forEach { it.onProjectsFinishedLoading(snapshot) }
     }
 
-    private fun resolveProjectTypeForSettings(typeId: String): ProjectType? {
-        BuiltinRegistries.ProjectType.get(typeId)?.let { return it }
-        val localId = typeId.substringAfterLast(':', missingDelimiterValue = typeId)
-        if (localId != typeId) {
-            BuiltinRegistries.ProjectType.get(localId)?.let { resolved ->
-                logger.debug(
-                    "Resolved project type '{}' to local id '{}' for project-scoped settings",
-                    typeId,
-                    localId
-                )
-                return resolved
-            }
-        }
-        return null
-    }
-
-    private fun ensureProjectScopedSettings(project: ProjectBase) {
-        try {
-            val type = resolveProjectTypeForSettings(project.typeId)
-            if (type == null) {
-                logger.debug(
-                    "Skipping project-scoped settings initialization for {} (unknown project type '{}')",
-                    project.path,
-                    project.typeId
-                )
-                return
-            }
-            ProjectScopedSettingsMngr.ensureProjectFiles(project, type.projectSettings)
-        } catch (t: Throwable) {
-            logger.warn("Failed to initialize project-scoped settings for {}", project.path, t)
-        }
-    }
-
     private fun loadProjectFromDir(dir: VPath): ProjectBase? {
         val trMeta = ProjectFiles.readTrProject(dir) ?: run {
             logger.warn("No trproj.json found in {}", dir)
@@ -139,14 +106,10 @@ object ProjectMngr {
         val descriptor = TemplateRegistry.get(typeId)
         if(descriptor is ProjectFileLoader) {
             return try {
-                descriptor.loadFromProjectFile(trMeta, dir).also { project ->
-                    ensureProjectScopedSettings(project)
-                }
+                descriptor.loadFromProjectFile(trMeta, dir)
             } catch (e: Exception) {
                 logger.error("Failed to load project via ProjectFileLoader for type=$typeId in $dir", e)
-                ProjectBase(typeId, dir, name, icon, metaElem.jsonObjectOrEmpty()).also { project ->
-                    ensureProjectScopedSettings(project)
-                }
+                ProjectBase(typeId, dir, name, icon, metaElem.jsonObjectOrEmpty())
             }
         }
 
@@ -165,21 +128,15 @@ object ProjectMngr {
                 val typed = json.decodeFromJsonElement(serializer, migratedMeta)
                 @Suppress("UNCHECKED_CAST")
                 val typedDescriptor = descriptor as TemplateDescriptor<Any>
-                return typedDescriptor.createProjectFromMeta(typed, descriptor.currentSchema, dir).also { project ->
-                    ensureProjectScopedSettings(project)
-                }
+                return typedDescriptor.createProjectFromMeta(typed, descriptor.currentSchema, dir)
             } catch (e: Exception) {
                 logger.error("Failed to decode meta for type=$typeId in $dir", e)
-                return ProjectBase(typeId, dir, name, icon, metaElem.jsonObjectOrEmpty()).also { project ->
-                    ensureProjectScopedSettings(project)
-                }
+                return ProjectBase(typeId, dir, name, icon, metaElem.jsonObjectOrEmpty())
             }
         }
 
         logger.warn("Unknown project type: $typeId (directory $dir)")
-        return ProjectBase(typeId, dir, name, icon, metaElem.jsonObjectOrEmpty()).also { project ->
-            ensureProjectScopedSettings(project)
-        }
+        return ProjectBase(typeId, dir, name, icon, metaElem.jsonObjectOrEmpty())
     }
 
     /**
@@ -507,12 +464,18 @@ object ProjectMngr {
     fun openProject(project: ProjectBase) {
         logger.info("Loading project {}", project.name)
         addProjectToCatalog(project.projectDir, project.name)
-        val wasDifferent = activeProject !== project
+        val previousActive = activeProject
+        val openMode = resolveOpenMode(project) ?: return
+        val wasDifferent = previousActive !== project
         activeProject = project
         val closeDashboard = CoreSettingValues.closeDashboardOnProjectOpen() && wasDifferent
 
         try {
-            ProjectWindows.openProject(project, closeDashboard = closeDashboard)
+            ProjectWindows.openProject(
+                project = project,
+                closeDashboard = closeDashboard,
+                mode = openMode
+            )
         } catch (e: Exception) {
             logger.debug("Failed to open project", e)
         }
@@ -567,6 +530,39 @@ object ProjectMngr {
         return getProjectsFromCatalog(source)
     }
 
+    private fun resolveOpenMode(project: ProjectBase): ProjectWindows.OpenMode? {
+        val existing = ProjectWindows.anyOpenWindow() ?: return ProjectWindows.OpenMode.NEW_WINDOW
+        val targetCanonical = project.path.toString().trim()
+        if (existing.projectCanonicalPath() == targetCanonical) {
+            return ProjectWindows.OpenMode.NEW_WINDOW
+        }
+
+        return when (CoreSettingValues.projectOpenPromptMode()) {
+            CoreSettingValues.ProjectOpenPromptMode.Always -> promptOpenMode(project)
+            CoreSettingValues.ProjectOpenPromptMode.Never -> when (CoreSettingValues.projectOpenDefaultTarget()) {
+                CoreSettingValues.ProjectOpenDefaultTarget.Current -> ProjectWindows.OpenMode.CURRENT_WINDOW
+                CoreSettingValues.ProjectOpenDefaultTarget.New -> ProjectWindows.OpenMode.NEW_WINDOW
+            }
+        }
+    }
+
+    private fun promptOpenMode(project: ProjectBase): ProjectWindows.OpenMode? {
+        val parent = QApplication.activeWindow() ?: Dashboard.I
+        val box = QMessageBox(parent)
+        box.icon = QMessageBox.Icon.Question
+        box.windowTitle = "Open Project"
+        box.text = "Open '${project.name}' in current window or a new window?"
+        val currentButton = box.addButton("Current Window", QMessageBox.ButtonRole.AcceptRole)
+        val newButton = box.addButton("New Window", QMessageBox.ButtonRole.ActionRole)
+        box.addButton(QMessageBox.StandardButton.Cancel)
+        box.exec()
+        return when (box.clickedButton()) {
+            currentButton -> ProjectWindows.OpenMode.CURRENT_WINDOW
+            newButton -> ProjectWindows.OpenMode.NEW_WINDOW
+            else -> null
+        }
+    }
+
     private fun isDashboardActive(): Boolean {
         val dash = Dashboard.I ?: return false
         return dash.isVisible
@@ -581,7 +577,6 @@ object ProjectMngr {
      * Notify listeners that a project was created outside the manager.
      */
     fun notifyCreatedExternal(project: ProjectBase) {
-        ensureProjectScopedSettings(project)
         addProjectToCatalog(project.projectDir, project.name)
         synchronized(_projectsLock) {
             val existing = _projects.any { it.projectDir.toAbsolute() == project.projectDir.toAbsolute() }

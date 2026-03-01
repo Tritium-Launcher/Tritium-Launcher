@@ -177,9 +177,7 @@ class EditorTab(icon: QIcon?, text: String, private val parentBar: EditorTabBar)
 
         if(isSelected) {
             val indicatorHeight = 2
-            val indicatorInset = 4
-            val indicatorWidth = (width() - indicatorInset * 2).coerceAtLeast(1)
-            painter.fillRect(indicatorInset, height() - indicatorHeight, indicatorWidth, indicatorHeight, QColor(255, 255, 255, 230))
+            painter.fillRect(0, height() - indicatorHeight, width().coerceAtLeast(1), indicatorHeight, QColor(255, 255, 255, 230))
         }
 
         painter.end()

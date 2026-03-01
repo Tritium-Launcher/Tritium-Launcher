@@ -10,6 +10,7 @@ import io.github.footermandev.tritium.platform.CompanionBridge
 import io.github.footermandev.tritium.platform.CompanionBridgeResponse
 import io.github.footermandev.tritium.platform.GameLauncher
 import io.github.footermandev.tritium.platform.GameProcessMngr
+import io.github.footermandev.tritium.ui.dashboard.Dashboard
 import io.github.footermandev.tritium.ui.helpers.runOnGuiThread
 import io.github.footermandev.tritium.ui.notifications.NotificationMngr
 import io.github.footermandev.tritium.ui.project.ProjectTaskMngr
@@ -18,13 +19,15 @@ import io.github.footermandev.tritium.ui.project.menu.MenuActionContext
 import io.github.footermandev.tritium.ui.project.menu.MenuItem
 import io.github.footermandev.tritium.ui.project.menu.MenuItemKind
 import io.github.footermandev.tritium.ui.project.menu.builtin.BuiltinMenuItems.All
+import io.github.footermandev.tritium.ui.project.sidebar.ProjectLogsSidePanelProvider
 import io.github.footermandev.tritium.ui.theme.TIcons
 import io.github.footermandev.tritium.ui.theme.qt.grayOverlay
 import io.github.footermandev.tritium.ui.theme.qt.icon
+import io.github.footermandev.tritium.ui.wizard.NewProjectDialog
 import io.qt.core.Qt
 import io.qt.gui.QGuiApplication
 import io.qt.gui.QIcon
-import io.qt.widgets.QMessageBox
+import io.qt.widgets.*
 import kotlinx.coroutines.*
 import java.nio.file.Files
 
@@ -75,41 +78,7 @@ object BuiltinMenuItems {
         action = { ctx ->
             val project = ctx.project ?: return@MenuItem
             scope.launch {
-                if (isAssetGenerationActive(project)) return@launch
-                val wasRunning = GameLauncher.isGameRunning(project)
-                if (wasRunning) {
-                    val stop = stopGame(project)
-                    if (!stop.stopped) {
-                        logger.warn("Play/Rerun stop phase failed: {}", stop.message)
-                        return@launch
-                    }
-                }
-
-                val needsDownload = GameLauncher.needsRuntimeDownload(project)
-                if (!wasRunning && needsDownload) {
-                    GameLauncher.prepareRuntime(project)
-                    val finished = waitForRuntimePreparation(project, DOWNLOAD_WAIT_TIMEOUT_MS)
-                    if (!finished) {
-                        logger.warn("Timed out waiting for runtime preparation to finish for '{}'", project.name)
-                        return@launch
-                    }
-
-                    val stillNeedsDownload = GameLauncher.needsRuntimeDownload(project)
-                    if (!stillNeedsDownload) {
-                        logger.info("Runtime downloads finished for '{}'", project.name)
-                        postActionStatus(
-                            project = project,
-                            header = "Downloads Finished",
-                            message = "Runtime assets and loader files are ready.",
-                            icon = TIcons.Download.icon
-                        )
-                    } else {
-                        logger.warn("Runtime preparation finished but runtime is still incomplete for '{}'", project.name)
-                    }
-                    return@launch
-                }
-
-                GameLauncher.launch(project)
+                launchOrPrepare(project)
             }
         }
     )
@@ -151,11 +120,122 @@ object BuiltinMenuItems {
     val Game = MenuItem("game", "&Game", order = 30, kind = MenuItemKind.MENU)
     val Help = MenuItem("help", "&Help", order = 100, kind = MenuItemKind.MENU)
 
+    val FileNew = MenuItem(
+        id = "file_new",
+        title = "New",
+        parentId = File.id,
+        order = 0,
+        kind = MenuItemKind.MENU
+    )
+
+    val NewProject = MenuItem(
+        id = "new_project",
+        title = "Project...",
+        parentId = FileNew.id,
+        order = 0,
+        kind = MenuItemKind.ACTION,
+        icon = TIcons.NewProject.icon,
+        action = { ctx ->
+            NewProjectDialog(ctx.window).isVisible = true
+        }
+    )
+
+    val NewProjectFromExisting = MenuItem(
+        id = "new_project_existing_sources",
+        title = "Project from Existing Sources...",
+        parentId = FileNew.id,
+        order = 10,
+        kind = MenuItemKind.ACTION,
+        icon = TIcons.Import.icon,
+        action = { ctx ->
+            importProjectFromExistingSources(ctx.window)
+        }
+    )
+
+    val NewProjectFromGit = MenuItem(
+        id = "new_project_git",
+        title = "Project from Git...",
+        parentId = FileNew.id,
+        order = 20,
+        kind = MenuItemKind.ACTION,
+        icon = TIcons.Git.icon,
+        enabled = false
+    )
+
+    val RecentProjects = MenuItem(
+        id = "recent_projects",
+        title = "Recent Projects",
+        parentId = File.id,
+        order = 10,
+        kind = MenuItemKind.MENU,
+        childrenProvider = { ctx ->
+            val currentPath = ctx.project?.projectDir?.toAbsolute()
+            val projects = ProjectMngr.projects
+                .filter { it.typeId != ProjectMngr.INVALID_CATALOG_PROJECT_TYPE }
+                .filter { currentPath == null || it.projectDir.toAbsolute() != currentPath }
+
+            if (projects.isEmpty()) {
+                listOf(
+                    MenuItem(
+                        id = "recent_projects_none",
+                        title = "(None)",
+                        kind = MenuItemKind.ACTION,
+                        enabled = false,
+                        order = 0
+                    )
+                )
+            } else {
+                projects.take(12).mapIndexed { idx, project ->
+                    MenuItem(
+                        id = "recent_project_${idx}_${project.path.toString().hashCode()}",
+                        title = project.name,
+                        kind = MenuItemKind.ACTION,
+                        order = idx,
+                        action = {
+                            ProjectMngr.openProject(project)
+                        }
+                    )
+                }
+            }
+        }
+    )
+
+    val CloseProject = MenuItem(
+        id = "close_project",
+        title = "Close Project",
+        parentId = File.id,
+        order = 20,
+        kind = MenuItemKind.ACTION,
+        shortcut = "Ctrl+W",
+        action = { ctx ->
+            val window = ctx.window
+            val wasVisible = window?.isVisible == true
+            window?.close()
+            if (wasVisible && window.isVisible) return@MenuItem
+
+            if (Dashboard.I == null) {
+                Dashboard.createAndShow()
+            }
+            val dashboard = Dashboard.I
+            dashboard?.show()
+            dashboard?.raise()
+            dashboard?.activateWindow()
+        }
+    )
+
+    val FileSepBeforeInvalidate = MenuItem(
+        id = "file_sep_before_invalidate",
+        title = "",
+        parentId = File.id,
+        order = 70,
+        kind = MenuItemKind.SEPARATOR
+    )
+
     val InvalidateCaches = MenuItem(
         id = "invalidate_caches",
         title = "Invalidate Caches",
         parentId = File.id,
-        order = 90,
+        order = 80,
         kind = MenuItemKind.ACTION,
         enabledResolver = {
             GameProcessMngr.active().none { ctx -> ctx.isRunning }
@@ -174,11 +254,243 @@ object BuiltinMenuItems {
         }
     )
 
-    val ReloadServer = MenuItem(
-        id = "reload_server",
-        title = "Reload Server",
+    val FileSepBeforeExit = MenuItem(
+        id = "file_sep_before_exit",
+        title = "",
+        parentId = File.id,
+        order = 90,
+        kind = MenuItemKind.SEPARATOR
+    )
+
+    val ExitApp = MenuItem(
+        id = "exit_app",
+        title = "Exit",
+        parentId = File.id,
+        order = 100,
+        kind = MenuItemKind.ACTION,
+        shortcut = "Ctrl+Q",
+        action = {
+            QApplication.quit()
+        }
+    )
+
+    val EditUndo = MenuItem(
+        id = "edit_undo",
+        title = "Undo",
+        parentId = Edit.id,
+        order = 0,
+        kind = MenuItemKind.ACTION,
+        shortcut = "Ctrl+Z",
+        action = { ctx -> runEditCommand(ctx.window, EditCommand.UNDO) }
+    )
+
+    val EditRedo = MenuItem(
+        id = "edit_redo",
+        title = "Redo",
+        parentId = Edit.id,
+        order = 10,
+        kind = MenuItemKind.ACTION,
+        shortcut = "Ctrl+Shift+Z",
+        action = { ctx -> runEditCommand(ctx.window, EditCommand.REDO) }
+    )
+
+    val EditSeparator = MenuItem(
+        id = "edit_separator",
+        title = "",
+        parentId = Edit.id,
+        order = 20,
+        kind = MenuItemKind.SEPARATOR
+    )
+
+    val EditCut = MenuItem(
+        id = "edit_cut",
+        title = "Cut",
+        parentId = Edit.id,
+        order = 30,
+        kind = MenuItemKind.ACTION,
+        shortcut = "Ctrl+X",
+        action = { ctx -> runEditCommand(ctx.window, EditCommand.CUT) }
+    )
+
+    val EditCopy = MenuItem(
+        id = "edit_copy",
+        title = "Copy",
+        parentId = Edit.id,
+        order = 40,
+        kind = MenuItemKind.ACTION,
+        shortcut = "Ctrl+C",
+        action = { ctx -> runEditCommand(ctx.window, EditCommand.COPY) }
+    )
+
+    val EditPaste = MenuItem(
+        id = "edit_paste",
+        title = "Paste",
+        parentId = Edit.id,
+        order = 50,
+        kind = MenuItemKind.ACTION,
+        shortcut = "Ctrl+V",
+        action = { ctx -> runEditCommand(ctx.window, EditCommand.PASTE) }
+    )
+
+    val EditDelete = MenuItem(
+        id = "edit_delete",
+        title = "Delete",
+        parentId = Edit.id,
+        order = 60,
+        kind = MenuItemKind.ACTION,
+        shortcut = "Delete",
+        action = { ctx -> runEditCommand(ctx.window, EditCommand.DELETE) }
+    )
+
+    val ViewToolWindows = MenuItem(
+        id = "view_tool_windows",
+        title = "Tool Windows",
+        parentId = View.id,
+        order = 0,
+        kind = MenuItemKind.MENU,
+        childrenProvider = { ctx ->
+            val window = ctx.window ?: return@MenuItem emptyList()
+            val docks = window.findChildren(QDockWidget::class.java)
+                .filter { !it.objectName.isNullOrBlank() }
+                .sortedBy { it.windowTitle }
+            if (docks.isEmpty()) {
+                listOf(
+                    MenuItem(
+                        id = "tool_windows_none",
+                        title = "(None)",
+                        kind = MenuItemKind.ACTION,
+                        enabled = false,
+                        order = 0
+                    )
+                )
+            } else {
+                docks.mapIndexed { idx, dock ->
+                    val title = dock.windowTitle.ifBlank { dock.objectName }
+                    MenuItem(
+                        id = "tool_window_${dock.objectName}",
+                        title = title,
+                        kind = MenuItemKind.ACTION,
+                        order = idx,
+                        action = {
+                            dock.show()
+                            dock.raise()
+                        }
+                    )
+                }
+            }
+        }
+    )
+
+    val ViewIncreaseFont = MenuItem(
+        id = "view_increase_font_size",
+        title = "Increase Font Size",
+        parentId = View.id,
+        order = 10,
+        kind = MenuItemKind.ACTION,
+        shortcut = "Ctrl++",
+        action = { ctx -> adjustFocusedTextWidgetFont(ctx.window, +1) }
+    )
+
+    val ViewDecreaseFont = MenuItem(
+        id = "view_decrease_font_size",
+        title = "Decrease Font Size",
+        parentId = View.id,
+        order = 20,
+        kind = MenuItemKind.ACTION,
+        shortcut = "Ctrl+-",
+        action = { ctx -> adjustFocusedTextWidgetFont(ctx.window, -1) }
+    )
+
+    val LaunchGame = MenuItem(
+        id = "launch_game",
+        title = "Launch...",
         parentId = Game.id,
         order = 0,
+        kind = MenuItemKind.ACTION,
+        enabledResolver = { ctx ->
+            val project = ctx.project
+            project != null && !isAssetGenerationActive(project)
+        },
+        action = { ctx ->
+            val project = ctx.project ?: return@MenuItem
+            scope.launch {
+                launchOrPrepare(project)
+            }
+        }
+    )
+
+    val StopGame = MenuItem(
+        id = "stop_game_menu",
+        title = "Stop",
+        parentId = Game.id,
+        order = 10,
+        kind = MenuItemKind.ACTION,
+        visibleResolver = { ctx ->
+            val project = ctx.project ?: return@MenuItem false
+            hasCompanionModInstalled(project)
+        },
+        enabledResolver = { ctx ->
+            ctx.project?.let { GameLauncher.isGameRunning(it) } == true
+        },
+        action = { ctx ->
+            val project = ctx.project ?: return@MenuItem
+            scope.launch {
+                stopGame(project, forceKill = false)
+            }
+        }
+    )
+
+    val StopAsKillGame = MenuItem(
+        id = "stop_game_fallback_menu",
+        title = "Kill Game",
+        parentId = Game.id,
+        order = 10,
+        kind = MenuItemKind.ACTION,
+        visibleResolver = { ctx ->
+            val project = ctx.project ?: return@MenuItem false
+            !hasCompanionModInstalled(project)
+        },
+        enabledResolver = { ctx ->
+            ctx.project?.let { GameLauncher.isGameRunning(it) } == true
+        },
+        action = { ctx ->
+            val project = ctx.project ?: return@MenuItem
+            scope.launch {
+                stopGame(project, forceKill = true)
+            }
+        }
+    )
+
+    val KillGame = MenuItem(
+        id = "kill_game_menu",
+        title = "Kill",
+        parentId = Game.id,
+        order = 20,
+        kind = MenuItemKind.ACTION,
+        enabledResolver = { ctx ->
+            ctx.project?.let { GameLauncher.isGameRunning(it) } == true
+        },
+        action = { ctx ->
+            val project = ctx.project ?: return@MenuItem
+            scope.launch {
+                stopGame(project, forceKill = true)
+            }
+        }
+    )
+
+    val GameSeparatorOne = MenuItem(
+        id = "game_sep_one",
+        title = "",
+        parentId = Game.id,
+        order = 30,
+        kind = MenuItemKind.SEPARATOR
+    )
+
+    val ReloadServer = MenuItem(
+        id = "reload_server",
+        title = "Reload",
+        parentId = Game.id,
+        order = 40,
         kind = MenuItemKind.ACTION,
         action = { ctx ->
             val project = ctx.project
@@ -193,7 +505,7 @@ object BuiltinMenuItems {
         id = "dump_registry",
         title = "Dump Registry",
         parentId = Game.id,
-        order = 10,
+        order = 50,
         kind = MenuItemKind.ACTION,
         action = { ctx ->
             val project = ctx.project
@@ -203,6 +515,246 @@ object BuiltinMenuItems {
             }
         }
     )
+
+    val RunCommand = MenuItem(
+        id = "run_command",
+        title = "Run Command...",
+        parentId = Game.id,
+        order = 60,
+        kind = MenuItemKind.ACTION,
+        action = { ctx ->
+            val cmd = QInputDialog.getText(
+                ctx.window,
+                "Run Command",
+                "Command:",
+                QLineEdit.EchoMode.Normal,
+                ""
+            )?.trim().orEmpty()
+            if (cmd.isBlank()) return@MenuItem
+            val project = ctx.project
+            scope.launch {
+                val response = CompanionBridge.sendCommand(cmd)
+                postBridgeResponse(project, "Run Command", response)
+            }
+        }
+    )
+
+    val GameSeparatorTwo = MenuItem(
+        id = "game_sep_two",
+        title = "",
+        parentId = Game.id,
+        order = 70,
+        kind = MenuItemKind.SEPARATOR
+    )
+
+    val ShowLatestLog = MenuItem(
+        id = "show_latest_log",
+        title = "Show Latest Log",
+        parentId = Game.id,
+        order = 80,
+        kind = MenuItemKind.ACTION,
+        action = { ctx ->
+            ctx.window?.let { ProjectLogsSidePanelProvider.focusLatestLog(it) }
+        }
+    )
+
+    val ShowDebugLog = MenuItem(
+        id = "show_debug_log",
+        title = "Show Debug Log",
+        parentId = Game.id,
+        order = 90,
+        kind = MenuItemKind.ACTION,
+        visibleResolver = { ctx ->
+            val project = ctx.project ?: return@MenuItem false
+            ProjectLogsSidePanelProvider.hasDebugLog(project)
+        },
+        action = { ctx ->
+            ctx.window?.let { ProjectLogsSidePanelProvider.focusDebugLog(it) }
+        }
+    )
+
+    val About = MenuItem(
+        id = "about_app",
+        title = "About",
+        parentId = Help.id,
+        order = 0,
+        kind = MenuItemKind.ACTION,
+        action = { ctx ->
+            QMessageBox.about(
+                ctx.window,
+                "About Tritium",
+                "Tritium ${TConstants.VERSION}"
+            )
+        }
+    )
+
+    private enum class EditCommand {
+        UNDO,
+        REDO,
+        CUT,
+        COPY,
+        PASTE,
+        DELETE
+    }
+
+    private suspend fun launchOrPrepare(project: ProjectBase) {
+        if (isAssetGenerationActive(project)) return
+        val wasRunning = GameLauncher.isGameRunning(project)
+        if (wasRunning) {
+            val stop = stopGame(project)
+            if (!stop.stopped) {
+                logger.warn("Launch stop phase failed: {}", stop.message)
+                return
+            }
+        }
+
+        val needsDownload = GameLauncher.needsRuntimeDownload(project)
+        if (!wasRunning && needsDownload) {
+            GameLauncher.prepareRuntime(project)
+            val finished = waitForRuntimePreparation(project, DOWNLOAD_WAIT_TIMEOUT_MS)
+            if (!finished) {
+                logger.warn("Timed out waiting for runtime preparation to finish for '{}'", project.name)
+                return
+            }
+
+            val stillNeedsDownload = GameLauncher.needsRuntimeDownload(project)
+            if (!stillNeedsDownload) {
+                logger.info("Runtime downloads finished for '{}'", project.name)
+                postActionStatus(
+                    project = project,
+                    header = "Downloads Finished",
+                    message = "Runtime assets and loader files are ready.",
+                    icon = TIcons.Download.icon
+                )
+            } else {
+                logger.warn("Runtime preparation finished but runtime is still incomplete for '{}'", project.name)
+            }
+            return
+        }
+
+        GameLauncher.launch(project)
+    }
+
+    private fun importProjectFromExistingSources(window: QWidget?) {
+        val startDir = try {
+            ProjectMngr.projectsDir.toAbsolute().toString()
+        } catch (_: Throwable) {
+            fromTR().toString()
+        }
+        val chosen = QFileDialog.getOpenFileName(
+            window,
+            "Import Project",
+            startDir,
+            "Tritium Project (trproj.json);;JSON Files (*.json);;All Files (*)"
+        )
+        val selectedPath = chosen.result.trim()
+        if (selectedPath.isBlank()) return
+
+        val selected = VPath.get(selectedPath).expandHome().toAbsolute().normalize()
+        val projectDir = selected.parent()
+        val projectFile = if (selected.fileName() == "trproj.json") selected else projectDir.resolve("trproj.json")
+        if (!projectFile.exists()) {
+            QMessageBox.warning(
+                window,
+                "Import Project",
+                "Selected path does not contain trproj.json."
+            )
+            return
+        }
+
+        val project = try {
+            ProjectMngr.loadProject(projectDir)
+        } catch (t: Throwable) {
+            logger.warn("Failed to import project from {}", projectDir, t)
+            null
+        }
+        if (project == null) {
+            QMessageBox.warning(
+                window,
+                "Import Project",
+                "Failed to load project from selected path."
+            )
+            return
+        }
+
+        ProjectMngr.notifyCreatedExternal(project)
+        ProjectMngr.openProject(project)
+    }
+
+    private fun hasCompanionModInstalled(project: ProjectBase): Boolean {
+        val modsDir = project.projectDir.resolve("mods")
+        if (!modsDir.exists() || !modsDir.isDir()) return false
+        return modsDir.list().any { file ->
+            val name = file.fileName().lowercase()
+            file.isFile() && name.endsWith(".jar") && name.contains("tritiumcompanion")
+        }
+    }
+
+    private fun runEditCommand(window: QMainWindow?, command: EditCommand) {
+        val focused = QApplication.focusWidget() ?: window?.focusWidget()
+        when (focused) {
+            is QTextEdit -> when (command) {
+                EditCommand.UNDO -> focused.undo()
+                EditCommand.REDO -> focused.redo()
+                EditCommand.CUT -> focused.cut()
+                EditCommand.COPY -> focused.copy()
+                EditCommand.PASTE -> focused.paste()
+                EditCommand.DELETE -> {
+                    val cursor = focused.textCursor()
+                    if (cursor.hasSelection()) cursor.removeSelectedText()
+                }
+            }
+            is QPlainTextEdit -> when (command) {
+                EditCommand.UNDO -> focused.undo()
+                EditCommand.REDO -> focused.redo()
+                EditCommand.CUT -> focused.cut()
+                EditCommand.COPY -> focused.copy()
+                EditCommand.PASTE -> focused.paste()
+                EditCommand.DELETE -> {
+                    val cursor = focused.textCursor()
+                    if (cursor.hasSelection()) cursor.removeSelectedText()
+                }
+            }
+            is QLineEdit -> when (command) {
+                EditCommand.UNDO -> focused.undo()
+                EditCommand.REDO -> focused.redo()
+                EditCommand.CUT -> focused.cut()
+                EditCommand.COPY -> focused.copy()
+                EditCommand.PASTE -> focused.paste()
+                EditCommand.DELETE -> focused.del()
+            }
+        }
+    }
+
+    private fun adjustFocusedTextWidgetFont(window: QMainWindow?, delta: Int) {
+        val projectWindow = window as? ProjectViewWindow
+        if (projectWindow?.adjustEditorFontSize(delta) == true) {
+            return
+        }
+
+        val focused = QApplication.focusWidget() ?: window?.focusWidget()
+        fun adjust(current: Int): Int {
+            val base = if (current > 0) current else 11
+            return (base + delta).coerceIn(7, 48)
+        }
+        when (focused) {
+            is QTextEdit -> {
+                val font = focused.font()
+                font.setPointSize(adjust(font.pointSize()))
+                focused.font = font
+            }
+            is QPlainTextEdit -> {
+                val font = focused.font()
+                font.setPointSize(adjust(font.pointSize()))
+                focused.font = font
+            }
+            is QLineEdit -> {
+                val font = focused.font()
+                font.setPointSize(adjust(font.pointSize()))
+                focused.font = font
+            }
+        }
+    }
 
     private fun postBridgeResponse(project: ProjectBase?, actionName: String, response: CompanionBridgeResponse) {
         if (!response.ok) {
@@ -392,12 +944,41 @@ object BuiltinMenuItems {
         Play,
         Stop,
         File,
+        FileNew,
+        NewProject,
+        NewProjectFromExisting,
+        NewProjectFromGit,
+        RecentProjects,
+        CloseProject,
+        FileSepBeforeInvalidate,
         InvalidateCaches,
+        FileSepBeforeExit,
+        ExitApp,
         Edit,
+        EditUndo,
+        EditRedo,
+        EditSeparator,
+        EditCut,
+        EditCopy,
+        EditPaste,
+        EditDelete,
         View,
+        ViewToolWindows,
+        ViewIncreaseFont,
+        ViewDecreaseFont,
         Game,
-        Help,
+        LaunchGame,
+        StopGame,
+        StopAsKillGame,
+        KillGame,
+        GameSeparatorOne,
         ReloadServer,
-        DumpRegistry
+        DumpRegistry,
+        RunCommand,
+        GameSeparatorTwo,
+        ShowLatestLog,
+        ShowDebugLog,
+        Help,
+        About
     )
 }
