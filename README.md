@@ -5,7 +5,7 @@
 # Tritium Launcher
 ### A Minecraft Launcher IDE for Modpack Developers
 
-This is a work-in-progress Launcher with features specially designed for Modpack Developers, such as:
+This is an ***in-development*** Launcher with features specially designed for Modpack Developers, such as:
 * A useable Code Editor
 * Modpack version uploads to sites such as Curseforge or Modrinth
 * Easy Mod config file modification and management
