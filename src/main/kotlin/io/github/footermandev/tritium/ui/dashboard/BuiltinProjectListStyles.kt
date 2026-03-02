@@ -15,6 +15,7 @@ import io.qt.Nullable
 import io.qt.core.*
 import io.qt.gui.*
 import io.qt.widgets.*
+import kotlin.math.ceil
 import kotlin.math.max
 import kotlin.math.roundToInt
 import kotlin.random.Random
@@ -47,6 +48,7 @@ object DvdStyleProvider : ProjectListStyleProvider {
 private const val GRID_TILE_WIDTH = 90
 private const val GRID_ICON_SIZE = 36
 private const val GRID_H_SPACING = 6
+private const val GRID_TILE_TITLE_WIDTH = GRID_TILE_WIDTH - 16
 
 /** Header label for groups with a context menu to reorder groups. */
 private class GroupHeaderLabel(
@@ -591,6 +593,7 @@ private class ListStyle(private val ctx: ProjectStyleContext) : ProjectListStyle
     )
 
     private val list = QListWidget().apply {
+        objectName = "projectsListView"
         uniformItemSizes = false
         alternatingRowColors = true
         frameShape = QFrame.Shape.NoFrame
@@ -598,6 +601,16 @@ private class ListStyle(private val ctx: ProjectStyleContext) : ProjectListStyle
         verticalScrollMode = QAbstractItemView.ScrollMode.ScrollPerItem
         verticalScrollBarPolicy = Qt.ScrollBarPolicy.ScrollBarAlwaysOff
         mouseTracking = true
+        setThemedStyle {
+            selector("QListWidget#projectsListView") {
+                backgroundColor(TColors.Surface0)
+                border()
+                any("alternate-background-color", TColors.Surface0)
+            }
+            selector("QListWidget#projectsListView::item") {
+                background("transparent")
+            }
+        }
     }
 
     init {
@@ -684,7 +697,7 @@ private class ListStyle(private val ctx: ProjectStyleContext) : ProjectListStyle
             val secondary = if (isInvalid) {
                 "Invalid project: missing trproj.json"
             } else {
-                project?.path?.toString().orEmpty()
+                project?.path?.toString()?.redactUserPath().orEmpty()
             }
 
             val nameFont = QFont(opt.font)
@@ -732,8 +745,9 @@ private class ProjectTile(
             setAlignment(Qt.AlignmentFlag.AlignCenter)
             wordWrap = true
             textFormat = Qt.TextFormat.RichText
-            sizePolicy = QSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+            sizePolicy = QSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
         }
+        configureTileTitleLabel(title, title.text)
         layout.addWidget(title)
 
         cursor = if(ctx.controlsVisible()) QCursor(Qt.CursorShape.OpenHandCursor) else QCursor(Qt.CursorShape.PointingHandCursor)
@@ -994,8 +1008,9 @@ private class DraggableTile(
             setAlignment(Qt.AlignmentFlag.AlignCenter)
             wordWrap = true
             textFormat = Qt.TextFormat.RichText
-            sizePolicy = QSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+            sizePolicy = QSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Minimum)
         }
+        configureTileTitleLabel(title, title.text)
         layout.addWidget(title)
 
         setThemedStyle {
@@ -1121,6 +1136,21 @@ private fun wrapProjectName(project: ProjectBase): String {
 private fun wrapProjectName(name: String): String {
     val escaped = escapeHtml(name)
     return "<div style=\"text-align:center; word-break: break-word; overflow-wrap: anywhere;\">$escaped</div>"
+}
+
+private fun configureTileTitleLabel(label: QLabel, richText: String) {
+    label.minimumWidth = GRID_TILE_TITLE_WIDTH
+    label.text = richText
+
+    val doc = QTextDocument()
+    doc.defaultFont = label.font
+    doc.documentMargin = 0.0
+    doc.setHtml(richText)
+    doc.textWidth = GRID_TILE_TITLE_WIDTH.toDouble()
+
+    val renderedHeight = ceil(doc.size().height()).toInt()
+    val twoLines = label.fontMetrics().lineSpacing() * 2
+    label.minimumHeight = max(renderedHeight, twoLines)
 }
 
 private fun applyMenuStyle(menu: QMenu) {

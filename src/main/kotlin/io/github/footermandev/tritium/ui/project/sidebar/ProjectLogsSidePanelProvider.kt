@@ -50,6 +50,8 @@ class ProjectLogsSidePanelProvider : SidePanelProvider {
         private const val LOG_REFRESH_INTERVAL_MS = 1_500
         private const val LIST_REFRESH_INTERVAL_MS = 5_000
         private const val SCROLL_BOTTOM_SNAP_PX = 2
+        private const val COMBO_EXTRA_CHROME = 56
+        private const val COMBO_MIN_WIDTH = 140
 
         private val latestArchivedNameRx = Regex("^\\d{4}-\\d{2}-\\d{2}-\\d+\\.log\\.gz$")
         private val debugArchivedNameRx = Regex("^debug-\\d+\\.log\\.gz$")
@@ -150,6 +152,19 @@ class ProjectLogsSidePanelProvider : SidePanelProvider {
 
         fun updateGameRunningIndicator() {
             updateGameRunningIndicator(project, gameRunningDot)
+        }
+
+        fun applyContentWidth(combo: QComboBox) {
+            val metrics = combo.fontMetrics()
+            var longestLabelWidth = 0
+            for (i in 0 until combo.count) {
+                val width = metrics.horizontalAdvance(combo.itemText(i))
+                if (width > longestLabelWidth) longestLabelWidth = width
+            }
+            val width = (longestLabelWidth + COMBO_EXTRA_CHROME).coerceAtLeast(COMBO_MIN_WIDTH)
+            combo.minimumWidth = width
+            combo.maximumWidth = width
+            combo.adjustSize()
         }
 
         fun refresh(force: Boolean = false) {
@@ -297,6 +312,8 @@ class ProjectLogsSidePanelProvider : SidePanelProvider {
 
                 selectComboByUserData(latestCombo, prevLatest ?: activeRaw)
                 selectComboByUserData(debugCombo, prevDebug ?: activeRaw)
+                applyContentWidth(latestCombo)
+                applyContentWidth(debugCombo)
                 latestCombo.adjustSize()
                 debugCombo.adjustSize()
             } finally {

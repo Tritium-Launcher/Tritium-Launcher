@@ -65,10 +65,11 @@ internal object MSAL {
         }
     }
 
-    /* This is set due to having potential conflicts with Qt.
+    /**
+     * This is set due to having potential conflicts with Qt.
      *
      * When the system's version of Qt on Linux is newer than what Tritium uses, some URL commands will fail silently.
-     * Platform.openBrowser tries more than one URL command to ensure the browser is opened.
+     * [Platform.openBrowser] tries more than one URL command to ensure the browser is opened.
      */
     internal val openBrowserAction = OpenBrowserAction { url ->
         try {
